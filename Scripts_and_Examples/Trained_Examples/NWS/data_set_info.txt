@@ -1,0 +1,19 @@
+WeatherFrontDataset
+data_dir :: str :: /localscratch/9005492/data :: end
+label_dir :: str :: /localscratch/9005492/label :: end
+map_types :: dict(str: tuple(str, tuple(float,float), tuple(float,float), tuple(float,float))) :: {'hires': ('hires', (75.0, 30.0), (-140.0, -55.0), (-0.25, 0.25), None)} :: end
+levelrange :: list(int) :: [105, 109, 113, 117, 121, 125, 129, 133, 137] :: end
+transforms :: obj :: (Compose(
+    RandomHorizontalFlip(p=0.5)
+    RandomVerticalFlip(p=0.5)
+), Compose(
+    RandomHorizontalCoordsFlip(p=0.5)
+    RandomVerticalCoordsFlip(p=0.5)
+)) :: end
+outsize :: tuple(int,int) :: (128, 256) :: end
+translat :: tuple(int,int) :: (0, 0) :: end
+printFileName :: bool :: False :: end
+labelThickness :: int :: 1 :: end
+labelGrouping :: str :: w,c,o,s :: end
+Variables :: list(str) :: ['t', 'q', 'u', 'v', 'w', 'sp', 'kmPerLon'] :: end
+NormType :: int :: 1 :: end
