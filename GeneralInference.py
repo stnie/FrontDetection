@@ -64,7 +64,7 @@ class CSIEvaluator():
             self.offset = (self.border+10+5 , self.border+135)
         self.avgCSI = np.zeros((5,7))
         
-    def evaluate(self, labels, predictions):
+    def evaluate(self, labels, predictions, _):
         # downsample if necessary
         if(not self.ETH and self.halfRes):
             predictions = predictions.permute(0,3,1,2)
@@ -271,7 +271,8 @@ class ClimatologyEvaluator():
 
         self.ETH = args.ETH
         self.totalImage = torch.zeros((latRes, lonRes, args.classes))
-    def evaluate(self, _, fronts):
+        self.args = args
+    def evaluate(self, label, fronts, filename):
         if(not self.ETH):
             # decrease the resolution
             fronts = fronts.permute(0,3,1,2)
@@ -280,7 +281,7 @@ class ClimatologyEvaluator():
         self.totalImage += fronts[0]
 
     def finish(self):
-        name = os.path.join("Climatologies",args.outname)
+        name = os.path.join("Climatologies",self.args.outname)
         if(not os.path.isdir(name)):
             os.mkdir(name)
         
@@ -295,6 +296,52 @@ class ClimatologyEvaluator():
         climatology = climatology.astype(np.float32)
         climatology.tofile(name+"/"+typen+"climatology.bin")
 
+class DrawImageEvaluator():
+    def __init__(self, args):
+        self.outname = args.outname
+    def evaluate(self, label, fronts, name):
+        outfold = os.path.join("OutputImages", self.outname)
+        if(not os.path.isdir(outfold)):
+            os.mkdir(outfold)
+        filename = os.path.splitext(name[0])[0]
+        # save the label
+        # switch channels for usual output colors
+        outlabel = torch.zeros_like(label)
+        # red -> warm
+        outlabel[0,:,:,0] = label[0,:,:,0]
+        # green -> stationary
+        outlabel[0,:,:,1] = label[0,:,:,3]
+        # blue -> cold
+        outlabel[0,:,:,2] = label[0,:,:,1]
+        # pink -> occlusion
+        outlabel[0,:,:,0] = (outlabel[0,:,:,0]<=label[0,:,:,2])*label[0,:,:,2] + (outlabel[0,:,:,0] > label[0,:,:,2])*outlabel[0,:,:,0]
+        outlabel[0,:,:,2] = (outlabel[0,:,:,2]<=label[0,:,:,2])*label[0,:,:,2] + (outlabel[0,:,:,2] > label[0,:,:,2])*outlabel[0,:,:,2]
+
+        imsave(os.path.join(outfold, filename+"_label.png"), (outlabel.cpu().numpy()[0,20:-20,20:-20,:-1]*255).astype(np.uint8))
+        # save the prediction
+        #switch channels for usual output colors
+        outpred = torch.zeros_like(label)
+        # red -> warm
+        outpred[0,:,:,0] = fronts[0,:,:,1]
+        # green -> stationary
+        outpred[0,:,:,1] = fronts[0,:,:,4]
+        # blue -> cold
+        outpred[0,:,:,2] = fronts[0,:,:,2]
+        # pink -> occlusion
+        outpred[0,:,:,0] = (outpred[0,:,:,0]<=fronts[0,:,:,3])*fronts[0,:,:,3] + (outpred[0,:,:,0] > fronts[0,:,:,3])*outpred[0,:,:,0]
+
+        outpred[0,:,:,2] = (outpred[0,:,:,2]<=fronts[0,:,:,3])*fronts[0,:,:,3] + (outpred[0,:,:,2] > fronts[0,:,:,3])*outpred[0,:,:,2]
+
+        imsave(os.path.join(outfold, filename+"_prediction.png"), (outpred.cpu().numpy()[0,20:-20,20:-20,:-1]*255).astype(np.uint8))
+        
+        outdiff = torch.zeros((label.shape[1], label.shape[2], 3))
+        outdiff[:,:,0] = torch.sum(label[0,:,:,:], dim = -1).cpu()
+        outdiff[:,:,1] = fronts[0,:,:,0].cpu()
+        imsave(os.path.join(outfold, filename+"_diff.png"), (outdiff[20:-20,20:-20].numpy()*255).astype(np.uint8))
+
+
+    def finish(self):
+        print("Done") 
 
 class DistributedOptions():
     def __init__(self):
@@ -405,15 +452,7 @@ def setupDataset(args):
     if(ETH):
         myEraExtractor = ETHEraExtractor()
     # Create Dataset
-    #smallmlb
-    prefixLength = 8
-    if args.climatology:
-        #bml
-        prefixLength = 3
-    if args.ETH:
-        #F
-        prefixLength = 1
-    data_set = WeatherFrontDataset(data_dir=data_fold, label_dir=label_fold, mapTypes = mapTypes, levelRange = myLevelRange, transform=myTransform, outSize=cropsize, labelThickness= labelThickness, label_extractor = myLabelExtractor, era_extractor = myEraExtractor, asCoords = args.elastic, has_subfolds = (not args.ETH,False), removePrefix = prefixLength)
+    data_set = WeatherFrontDataset(data_dir=data_fold, label_dir=label_fold, mapTypes = mapTypes, levelRange = myLevelRange, transform=myTransform, outSize=cropsize, labelThickness= labelThickness, label_extractor = myLabelExtractor, era_extractor = myEraExtractor, asCoords = args.elastic, has_subfolds = (True,False), removePrefix = 8)
     return data_set
 
 def setupDataLoader(data_set, args):
@@ -463,19 +502,19 @@ def performInference(model, loader, num_samples, evaluator, parOpt, args):
         if(args.climatology):
             if(args.ETH):
                 # ETH does no additional filtering of the results
-                evaluator.evaluate(None, smoutputs.cpu())
+                evaluator.evaluate(None, smoutputs.cpu(), filename)
             else:
                 # The net does perform some filterin steps first
-                evaluator.evaluate(None, torch.from_numpy(smoutputs))
+                evaluator.evaluate(None, torch.from_numpy(smoutputs), filename)
         else:
             if(not args.elastic):
                 labels = labels.to(device = parOpt.device, non_blocking=False)
             pixPerDeg = 2 if args.ETH else 4
             labels = filterFronts(labels.cpu().numpy(), args.border*pixPerDeg)
             if(args.ETH):
-                evaluator.evaluate(torch.from_numpy(labels), smoutputs.cpu())
+                evaluator.evaluate(torch.from_numpy(labels), smoutputs.cpu(), filename)
             else:
-                evaluator.evaluate(torch.from_numpy(labels), torch.from_numpy(smoutputs))
+                evaluator.evaluate(torch.from_numpy(labels), torch.from_numpy(smoutputs), filename)
     evaluator.finish()
 
 def setupModel(args, parOpt):
@@ -552,6 +591,8 @@ if __name__ == "__main__":
     # Alternative: Create A climatology of a year
     if(args.climatology):
         evaluator = ClimatologyEvaluator(args)
+    if(args.drawImages):
+        evaluator = DrawImageEvaluator(args)
 
     num_samples = len(loader)
     if(args.num_samples != -1):
