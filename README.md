@@ -25,3 +25,7 @@ Potential command line command, assuming you are currently located in the Script
 Create_Climatology.sh path/to/network/<network_name>.pth  /path/to/network/data_set_info.txt <output_name>
 
 This will create a subfolder <output_name> in the folder according to the used script (Climatologies in this case), which contains several output files. ".bin" files are binary dumps of float32 data. In the case of Climatologies they have a resolution of 720x1440. In the case of Cross Sections they have a resolution of 17x4.  
+
+# Training of a network
+Training of a network can be performed using "train.sh" script.
+data should be split into training and validation sets and be located in the Training_Data/data  or Training_Data/test_data folder. Label data should be split identically and be located in the Training_Data/label or Training_Data/test_label folder. Naming and format of Label according to the previous section.
