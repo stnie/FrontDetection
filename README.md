@@ -1,5 +1,6 @@
 # FrontDetection
 CNN for detection and classification of synoptic scale fronts from ERA5 Reanalysis data
+The provided Code was tested on Python 3.8.2 and Pytorch 1.6
 
 The provided network detects and classifies synoptic scale fronts from atmospheric variables into 4 classes (warm front, cold front, occlusion, stationary front)
 
