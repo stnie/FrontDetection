@@ -430,7 +430,6 @@ def setupDataset(args):
         myLineGenerator = extractCoordsInRange(labelGroupingList)
     myLabelExtractor = DefaultFrontLabelExtractor(myLineGenerator)
 
-    variables = ['t','q','u','v','w','sp']    
     variables = ['t','q','u','v','w','sp','kmPerLon']
 
     normType = args.normType
@@ -445,14 +444,11 @@ def setupDataset(args):
 
     
 
-    #pathToMasks = os.path.join("/lustre","project","m2_jgu-binaryhpc","ERA5_LowerLevelsYearlyAverages","2016")
-    pathToMasks = os.path.join("/home","stefan","Documents","Binary","Front-Detection","myTrainingScripts","era5dataset")
-    sharedObj = [Lock(), pathToMasks]
-    myEraExtractor = DerivativeFlippingAwareEraExtractor(variables, [], [], 0.0, 0 , 1, normType = normType, sharedObj = sharedObj)
+    myEraExtractor = DerivativeFlippingAwareEraExtractor(variables, [], [], 0.0, 0 , 1, normType = normType, sharedObj = None)
     if(ETH):
         myEraExtractor = ETHEraExtractor()
     # Create Dataset
-    data_set = WeatherFrontDataset(data_dir=data_fold, label_dir=label_fold, mapTypes = mapTypes, levelRange = myLevelRange, transform=myTransform, outSize=cropsize, labelThickness= labelThickness, label_extractor = myLabelExtractor, era_extractor = myEraExtractor, asCoords = args.elastic, has_subfolds = (True,False), removePrefix = 8)
+    data_set = WeatherFrontDataset(data_dir=data_fold, label_dir=label_fold, mapTypes = mapTypes, levelRange = myLevelRange, transform=myTransform, outSize=cropsize, labelThickness= labelThickness, label_extractor = myLabelExtractor, era_extractor = myEraExtractor, asCoords = args.elastic, has_subfolds = (False,False))
     return data_set
 
 def setupDataLoader(data_set, args):
