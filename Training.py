@@ -78,7 +78,6 @@ def train(model, train_loader, epoch, seasons, criterion, optimizer, args, parOp
             m = outputs.shape[0]
             if(outputModifier is not None):
                 outputs = outputModifier(outputs)
-            
             loss = criterion(outputs, labels, masks)
             loss.backward()
             optimizer.step()

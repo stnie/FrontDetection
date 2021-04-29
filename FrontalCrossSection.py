@@ -14,8 +14,8 @@ from torch.utils.data.distributed import DistributedSampler
 from torchvision import transforms, utils
 from torchvision.models.segmentation import deeplabv3_resnet101
 from torchvision.transforms import Compose
-from Submodules.customtorchlayer.MyTransformations import RandomAffine, RandomCrop, FixedCrop, RandomErasing, GaussianNoise, RandomHorizontalCoordsFlip, RandomVerticalCoordsFlip
-from Submodules.customtorchlayer.MyLossFunctions import *
+from MyTransformations import RandomAffine, RandomCrop, FixedCrop, RandomErasing, GaussianNoise, RandomHorizontalCoordsFlip, RandomVerticalCoordsFlip
+from MyLossFunctions import *
 import random
 
 from Models.FDU3D import *
@@ -23,13 +23,11 @@ from Models.FDU3D import *
 from tqdm import tqdm, trange
 import argparse
 
-from Submodules.era5dataset.FrontDataset import *
+from era5dataset.FrontDataset import *
 # ERA Extractors
-from Submodules.era5dataset.EraExtractors import *
+from era5dataset.EraExtractors import *
 
 from IOModules.csbReader import *
-
-from multiprocessing import Lock
 
 from NetInfoImport import *
 
@@ -105,8 +103,7 @@ def setupDataset(args):
     
     myLevelRange = np.arange(105,138,4)
 
-    blur = GaussianNoise(3)
-    myTransform = (None, None)#Compose([blur]))
+    myTransform = (None, None)
     labelThickness = 1
     labelTrans = (0,0)
 
@@ -114,7 +111,6 @@ def setupDataset(args):
     myLineGenerator = extractStackedPolyLinesInRangeAsSignedDistance(labelGroupingList, labelThickness, labelTrans)
     myLabelExtractor = DefaultFrontLabelExtractor(myLineGenerator)
 
-    variables = ['t','q','u','v','w','sp']    
     variables = ['t','q','u','v','w','sp','kmPerLon']
 
     normType = args.normType
@@ -131,12 +127,7 @@ def setupDataset(args):
     variables.insert(6,"base(u)")
     variables.insert(7,"base(v)")
 
-    
-
-    #pathToMasks = os.path.join("/lustre","project","m2_jgu-binaryhpc","ERA5_LowerLevelsYearlyAverages","2016")
-    pathToMasks = os.path.join("/home","stefan","Documents","Binary","Front-Detection","myTrainingScripts","era5dataset")
-    sharedObj = [Lock(), pathToMasks]
-    myEraExtractor = DerivativeFlippingAwareEraExtractor(variables, [], [], 0.0, 0 , 1, normType = normType, sharedObj = sharedObj)
+    myEraExtractor = DerivativeFlippingAwareEraExtractor(variables, [], [], 0.0, 0 , 1, normType = normType, sharedObj = None)
     if(ETH):
         myEraExtractor = ETHEraExtractor()
     
@@ -250,13 +241,12 @@ def getValAlongNormal(image, var, udir, vdir, length, border, grad):
             elif(3 == myIdx):
                 myYdir = 1
                 myXdir = -1
+            
             # normalize direction
             myLen = np.sqrt(myYdir*myYdir+myXdir*myXdir)
             myXdir /= myLen
             myYdir /= myLen
-            #print(myXdir, myYdir)
-            #if(dirx[py,px] < 0 or diry[py,px] <0):
-            #    print(dirx[py,px], diry[py,px])
+            
             direction = udir[py,px]*myXdir+vdir[py,px]*myYdir
             pointsY = py-myYdir*np.arange(-length,length+1)
             pointsX = px+myXdir*np.arange(-length,length+1)
@@ -302,9 +292,10 @@ def performInference(model, loader, num_samples, parOpt, args):
             outputs = model(tgtIn)
             outputs = outputs.permute(0, 2, 3, 1)
             outputs = torch.softmax(outputs, dim=-1)
-            # remove all unprobable or short fronts
+            # remove all unlikely  or short fronts
             outputs = filterFronts(outputs.cpu().numpy(), border)
             
+        #Hard coded, for derivatives
         meanu, varu = 1.27024432, 6.74232481e+01
         meanv, varv = 1.0213897e-01, 4.36244384e+01
         meant, vart = 2.75355461e+02, 3.20404803e+02
@@ -314,13 +305,10 @@ def performInference(model, loader, num_samples, parOpt, args):
         udir = inputs[0,9*6+8]
         vdir = inputs[0,9*7+8]
 
-
-
-        # use the global mean method to get better comparable sets
-
-
+        # Generally no gradient (finite differences should be calculated)
         grad = False
 
+        # determine variable, which should be evaluated
         if(args.calcVar == "t" or args.calcVar == "dt"):
             grad = args.calcVar == "dt"
             var = inputs[0,8]*np.sqrt(vart)+meant
@@ -330,9 +318,12 @@ def performInference(model, loader, num_samples, parOpt, args):
         elif(args.calcVar == "sp"):
             var = inputs[0,5*9+8]*np.sqrt(varsp)+meansp
         elif(args.calcVar == "wind"):
+            # wind speed
             var = torch.abs(udir+1j*vdir)*2
+        
+        # Which kind of fronts should be tested (ML -> Network, WS -> WeatherService, OP -> over predicted (false positives), CP -> correct predicted (true positives, network oriented), 
+        # NP -> not ptedicted (false negatives), CL correctly labeled (true positives, weather service oriented)
         if(args.calcType == "ML"):
-            #outputs[0,:,:,1] += outputs[0,:,:,4]
             frontImage = outputs[0,:,:,1:]
         elif(args.calcType == "WS"):
             frontImage = labels[0,:,:,:]
@@ -349,8 +340,8 @@ def performInference(model, loader, num_samples, parOpt, args):
                     frontImage[:,:,channel] = frontImage[:,:,channel]*distImg
         
         elif(args.calcType == "NP" or args.calcType == "CL"):
-            # NoPrediction: All Label that are more than 3 pixel from the next prediction with prob higher than 0.5 and lenght >= 5
-            # CorrectLabel: All Label that are are no more than 3 pixel from the next prediction with prob higher than 0.5 and length >= 5
+            # NoPrediction: All Label that are more than 3 pixel from the next prediction
+            # CorrectLabel: All Label that are are no more than 3 pixel from the next prediction
             outputs = outputs[0,:,:,1:]
             frontImage = labels[0]
 
@@ -393,7 +384,6 @@ if __name__ == "__main__":
 
     sample_data = data_set[0]
     data_dims = sample_data[0].shape
-    #label_dims = sample_data[1].shape
 
 
     # Data information
@@ -442,6 +432,7 @@ if __name__ == "__main__":
     with torch.no_grad():
         avg_error, var_error = performInference(model, loader, num_samples, parOpt, args)
 
+    # output 
     if(not os.path.isdir(name)):
         os.mkdir(name)
     region = "NWS" if args.NWS else "DWD"
