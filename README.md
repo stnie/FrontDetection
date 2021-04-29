@@ -18,11 +18,15 @@ The pretrained example was trained using input samples from 2012 to 2015 and 201
 # Scores and Output examples
 The trained network generates a Critical Success Index against the weather service labels of more than 60\% for the detection of fronts. An exemplary timelapse of the networks output can be seen at ... for January 2016 at a 1 hour resolution. 
 
+
+# Installation
+For evaluation purposes no further installation is necessary apart from preparing your datasets. If you want to train a network or use the loss as described in the paper, you need to run the RunSetupCModules.sh script to compile the matching algorithm used in the proposed loss function. PyBind11 is needed for this.
+
 # Usage of the provided network
-The trained network can be tested on NWS data using the provided scripts. All scripts assume that the necessary ERA5 data is located directly in the corresponding ERA5_Data folder, while labels are located at Label_Data/hires/. Corresponding input and label files are assumend to have the same name except for the extension. Label data should be provided as ".txt" file in a format according to the High Resolution Coded Surface Bulletins issued by the NWS. 
+The trained network can be tested on NWS data using the provided scripts. All scripts assume that the necessary ERA5 data is located at <path/to/DataFolder> without any subfolders, while labels are located at <path/to/LabelFolder>/hires/. Corresponding input and label files are assumend to have the same name except for the extension. Label data should be provided as ".txt" file in a format according to the High Resolution Coded Surface Bulletins issued by the NWS. 
 
 Potential command line command, assuming you are currently located in the Scripts_and_Examples Folder:
-Create_Climatology.sh path/to/network/<network_name>.pth  /path/to/network/data_set_info.txt <output_name>
+Create_Climatology.sh path/to/network/<network_name>.pth  /path/to/network/data_set_info.txt <output_name> <path/to/DataFolder> <path/to/LabelFolder>
 
 This will create a subfolder <output_name> in the folder according to the used script (Climatologies in this case), which contains several output files. ".bin" files are binary dumps of float32 data. In the case of Climatologies they have a resolution of 720x1440. In the case of Cross Sections they have a resolution of 17x4.  
 
