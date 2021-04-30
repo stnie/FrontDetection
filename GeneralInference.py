@@ -516,16 +516,10 @@ def performInference(model, loader, num_samples, evaluator, parOpt, args):
 def setupModel(args, parOpt):
     model = None
     if(not args.ETH):
-        #Load Net
-        if(args.deeplab):
-            model = deeplabv3_resnet101(False, num_classes = out_channels)
-            model.backbone.conv1 = torch.nn.Conv2d(in_channels, 64, kernel_size=7, stride=2, padding=3, bias=False)
-            model = model.to(parOpt.device)
-        else:
-            embeddingFactor = 6
-            SubBlocks = (3,3,3)
-            kernel_size = 5
-            model = FDU2DNetLargeEmbedCombineModular(in_channel = in_channels, out_channel = out_channels, kernel_size = kernel_size, sub_blocks = SubBlocks, embedding_factor = embeddingFactor).to(parOpt.device)
+        embeddingFactor = 6
+        SubBlocks = (3,3,3)
+        kernel_size = 5
+        model = FDU2DNetLargeEmbedCombineModular(in_channel = args.in_channels, out_channel = args.out_channels, kernel_size = kernel_size, sub_blocks = SubBlocks, embedding_factor = embeddingFactor).to(parOpt.device)
         model.load_state_dict(torch.load(args.net, map_location = parOpt.device))
         model = model.eval()
         if(parOpt.myRank == 0):
@@ -564,7 +558,8 @@ if __name__ == "__main__":
     out_channels = args.classes
     if(args.binary):
         out_channels = 1
-    
+    args.in_channels = in_channels
+    args.out_channels = out_channels
 
     #Print info
     if(parOpt.myRank == 0):
