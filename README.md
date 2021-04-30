@@ -20,15 +20,33 @@ The trained network generates a Critical Success Index against the weather servi
 
 
 # Installation
-For evaluation purposes no further installation is necessary apart from preparing your datasets. If you want to train a network or use the loss as described in the paper, you need to run the RunSetupCModules.sh script to compile the matching algorithm used in the proposed loss function. PyBind11 is needed for this.
+Clone the repository for access to the code. For access to the pretrained models use git lfs to additionally pull the pretrained models. 
+For evaluation purposes no further installation is necessary apart from preparing your datasets. If you want to train a network or use the loss as described in the paper, you need to run the RunCModulesSetup.sh script to compile the matching algorithm used in the proposed loss function. PyBind11 is needed for this. The provided Scripts use fixed output locations, which need to be Created first. 
+Navigate into the Scripts and Examples Subfolder and Create 4 Folders:  Predictions, Climatologies, CrossSections and OutputImages
+
+e.g.
+git clone <this_repository>
+git lfs pull 
+cd Scripts_and_Examples
+./RunCModulesSetup.sh
+mkdir Predictions
+mkdir Climatologies
+mkdir CrossSections
+mkdir OutputImages
 
 # Usage of the provided network
 The trained network can be tested on NWS data using the provided scripts. All scripts assume that the necessary ERA5 data is located at <path/to/DataFolder> without any subfolders, while labels are located at <path/to/LabelFolder>/hires/. Corresponding input and label files are assumend to have the same name except for the extension. Label data should be provided as ".txt" file in a format according to the High Resolution Coded Surface Bulletins issued by the NWS. 
 
 Potential command line command, assuming you are currently located in the Scripts_and_Examples Folder:
 Create_Climatology.sh path/to/network/<network_name>.pth  /path/to/network/data_set_info.txt <output_name> <path/to/DataFolder> <path/to/LabelFolder>
+Calculate_CSI.sh path/to/network/<network_name>.pth  /path/to/network/data_set_info.txt <output_name> <path/to/DataFolder> <path/to/LabelFolder>
+Create_Cross_Section.sh path/to/network/<network_name>.pth  /path/to/network/data_set_info.txt <output_name> <variable> <path/to/DataFolder> <path/to/LabelFolder>
+Create_Output_Samples.sh path/to/network/<network_name>.pth  /path/to/network/data_set_info.txt <output_name> <path/to/DataFolder> <path/to/LabelFolder>
 
-This will create a subfolder <output_name> in the folder according to the used script (Climatologies in this case), which contains several output files. ".bin" files are binary dumps of float32 data. In the case of Climatologies they have a resolution of 720x1440. In the case of Cross Sections they have a resolution of 17x4.  
+This will create a subfolder <output_name> in the folder according to the used script, which contains several output files. 
+".bin" files are binary dumps of float32 data. 
+In the case of Climatologies they have a resolution of 720x1440. 
+In the case of Cross Sections they have a resolution of 17x4.  
 
 # Training of a network
 Training of a network can be performed using "train.sh" script.
