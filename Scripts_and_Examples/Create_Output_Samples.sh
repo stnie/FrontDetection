@@ -5,8 +5,4 @@ OUT_NAME=$3
 ERA_ROOT=$4
 LABEL_ROOT=$5
 
-<<<<<<< HEAD
 python ${PROGRAM} --net ${NET} --data ${ERA_ROOT} --label ${LABEL_ROOT} --outname ${OUT_NAME} --fromFile ${FROM_FILE} --classes 5 --labelGroupingList w,c,o,s --drawImages --NWS --num_samples 50
-=======
-python ${PROGRAM} --net ${NET} --data ${ERA_ROOT} --label ${LABEL_ROOT} --outname ${OUT_NAME} --fromFile ${FROM_FILE} --classes 5 --labelGroupingList w,c,o,s --drawImages --NWS --num_samples 5
->>>>>>> f3f7b3bc009e55d6ecb1402c9cf846e6353875a4
