@@ -1,14 +1,12 @@
 import numpy as np
 import argparse
 import os
-import matplotlib.pyplot as plt
 
 # torch
 import torch
 
 # Data loading
-from torch.utils.data import Dataset, DataLoader, SubsetRandomSampler, BatchSampler, Sampler
-from torch.utils.data.distributed import DistributedSampler
+from torch.utils.data import DataLoader, SubsetRandomSampler
 
 # Dat set
 from era5dataset.FrontDataset import *
@@ -16,7 +14,6 @@ from era5dataset.FrontDataset import *
 from era5dataset.EraExtractors import *
 
 # networks
-from torchvision.models.segmentation import deeplabv3_resnet101
 from Models.FDU3D import *
 from MyLossFunctions import *
 
@@ -26,17 +23,8 @@ from MyTransformations import *
 
 # distributed torch
 from torch.nn.parallel import DistributedDataParallel as DDP
-from torch import optim
-from torch.distributed.optim import DistributedOptimizer
-from torch.optim import swa_utils
 
 from datetime import timedelta
-
-# Display
-from tqdm import tqdm, trange
-
-# Output
-from skimage.io import imsave 
 
 from ParallelStarter import BeginMultiprocessing
 
@@ -564,8 +552,6 @@ def runTraining(local_rank, args, globalLock):
             save_model(model, PATH)
         np.array(myTrainError).tofile(name+"/type"+str(args.trainType)+"trainError.bin")
         np.array(myTestError).tofile(name+"/type"+str(args.trainType)+"testError.bin")
-        if(epoch >= swa_start):
-            save_model(swa_model, PATH+"swa")
         
     if args.distributed:
         torch.distributed.destroy_process_group()

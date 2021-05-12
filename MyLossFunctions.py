@@ -1,8 +1,5 @@
-from typing import Any
 import torch
-from scipy.ndimage import distance_transform_edt
 import numpy as np
-from skimage.io import imsave
 from skimage.draw import line
 import CModules.viterby.viterby as vd
 
