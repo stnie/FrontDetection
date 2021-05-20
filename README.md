@@ -16,7 +16,7 @@ The provided output has the same resolution as the input data, where for each pi
 The pretrained example was trained using input samples from 2012 to 2015 and 2018 to 2019 against labeled data generated from the Deutscher Wetterdienst (DWD) and North American Weather Service (NWS). The Network was validated on data from 2017 (not used for training) and tested on data from 2016 (not used for training)
 
 # Scores and Output examples
-The trained network generates a Critical Success Index against the weather service labels of more than 60\% for the detection of fronts. An exemplary timelapse of the networks output can be seen at {Add the doi for video} for January 2016 at a 1 hour resolution. 
+The trained network generates a Critical Success Index against the weather service labels of more than 60\% for the detection of fronts. An exemplary timelapse of the networks output can be seen at https://av.tib.eu/media/53399 for January 2016 at a 1 hour resolution. 
 
 
 # Installation
@@ -26,21 +26,32 @@ Navigate into the Scripts and Examples Subfolder and Create 4 Folders:  Predicti
 
 e.g.
 git clone <this_repository>
+
 git lfs pull 
+
 cd Scripts_and_Examples
+
 ./RunCModulesSetup.sh
+
 mkdir Predictions
+
 mkdir Climatologies
+
 mkdir CrossSections
+
 mkdir OutputImages
 
 # Usage of the provided network
 The trained network can be tested on NWS data using the provided scripts. All scripts assume that the necessary ERA5 data is located at <path/to/DataFolder> without any subfolders, while labels are located at <path/to/LabelFolder>/hires/. Corresponding input and label files are assumend to have the same name except for the extension. Label data should be provided as ".txt" file in a format according to the High Resolution Coded Surface Bulletins issued by the NWS. 
 
 Potential command line command, assuming you are currently located in the Scripts_and_Examples Folder:
+
 Create_Climatology.sh path/to/network/<network_name>.pth  /path/to/network/data_set_info.txt <output_name> <path/to/DataFolder> <path/to/LabelFolder>
+
 Calculate_CSI.sh path/to/network/<network_name>.pth  /path/to/network/data_set_info.txt <output_name> <path/to/DataFolder> <path/to/LabelFolder>
+
 Create_Cross_Section.sh path/to/network/<network_name>.pth  /path/to/network/data_set_info.txt <output_name> <variable> <path/to/DataFolder> <path/to/LabelFolder>
+
 Create_Output_Samples.sh path/to/network/<network_name>.pth  /path/to/network/data_set_info.txt <output_name> <path/to/DataFolder> <path/to/LabelFolder>
 
 <variable> is a string corresponding to the variable that should be extracted from the ERA5 file. t and q are currently supported. Adding a "d" as a prefix uses the derivative instead (e.g. dt or dq). 
