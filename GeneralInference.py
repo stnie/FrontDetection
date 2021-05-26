@@ -26,9 +26,6 @@ from NetInfoImport import *
 
 from FrontPostProcessing import filterFronts
 
-# Current Best
-# Medium Bottle Net, 32 Batchsize, BottleneckLayer 128 256 128, 3 levels, lr = 0.01, lines +- 1
-# ~ 45% validation loss 
 
 class CSIEvaluator():
     def __init__(self, args):
