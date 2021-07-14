@@ -6,8 +6,6 @@ from scipy.ndimage import distance_transform_edt
 
 from torch.utils.data import DataLoader, SequentialSampler
 
-from MyLossFunctions import *
-
 from Models.FDU3D import *
 
 from tqdm import tqdm
@@ -80,16 +78,18 @@ def setupDevice(args):
 def setupDataset(args):
     data_fold = args.data
     label_fold = args.label
+    stepsize = 0.25
     if(args.fullsize):
         cropsize = (720, 1440)
         mapTypes = {"NA": ("NA", (90,-89.75), (-180,180), (-0.25,0.25)) }
         if(args.NWS):
             mapTypes = {"hires": ("hires", (90, -89.75), (-180, 180), (-0.25,0.25)) }
     else:
-        cropsize = (200,360)
-        mapTypes = {"NA": ("NA", (80,30), (-45,45), (-0.25,0.25))}
+        cropsize = (184,360)
+        mapTypes = {"NA": ("NA", (76,30.25), (-50,40), (-stepsize, stepsize), None)}
         if(args.NWS):
-            mapTypes = {"hires": ("hires", (80, 30), (-145, -50), (-0.25,0.25)) }
+            cropsize = (184, 344) 
+            mapTypes = {"hires": ("hires", (76, 30.25), (-141, -55), (-stepsize,stepsize), None) }
     
     myLevelRange = np.arange(105,138,4)
 
@@ -116,6 +116,7 @@ def setupDataset(args):
     # append the basic wind to get the directions
     variables.insert(6,"base(u)")
     variables.insert(7,"base(v)")
+    variables.insert(8,"ept")
 
     myEraExtractor = DerivativeFlippingAwareEraExtractor(variables, [], [], 0.0, 0 , 1, normType = normType, sharedObj = None)
     if(ETH):
@@ -123,7 +124,7 @@ def setupDataset(args):
     
 
     # Create Dataset
-    data_set = WeatherFrontDataset(data_dir=data_fold, label_dir=label_fold, mapTypes = mapTypes, levelRange = myLevelRange, transform=myTransform, outSize=cropsize, labelThickness= labelThickness, label_extractor = myLabelExtractor, era_extractor = myEraExtractor, has_subfolds = (False, False), asCoords = False)
+    data_set = WeatherFrontDataset(data_dir=data_fold, label_dir=label_fold, mapTypes = mapTypes, levelRange = myLevelRange, transform=myTransform, outSize=cropsize, labelThickness= labelThickness, label_extractor = myLabelExtractor, era_extractor = myEraExtractor, has_subfolds = (True, False), asCoords = False, removePrefix = 8)
     return data_set
 
 
@@ -310,6 +311,9 @@ def performInference(model, loader, num_samples, parOpt, args):
         elif(args.calcVar == "wind"):
             # wind speed
             var = torch.abs(udir+1j*vdir)*2
+        elif(args.calcVar == "ept"):
+            var = inputs[0,9*8+8]
+
         
         # Which kind of fronts should be tested (ML -> Network, WS -> WeatherService, OP -> over predicted (false positives), CP -> correct predicted (true positives, network oriented), 
         # NP -> not ptedicted (false negatives), CL correctly labeled (true positives, weather service oriented)
@@ -377,7 +381,7 @@ if __name__ == "__main__":
 
 
     # Data information
-    in_channels = data_dims[0]-2*9
+    in_channels = data_dims[0]-3*9
     levels = data_dims[0]
     latRes = data_dims[1]
     lonRes = data_dims[2]
