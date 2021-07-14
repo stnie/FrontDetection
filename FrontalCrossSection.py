@@ -96,10 +96,10 @@ def setupDataset(args):
         if(args.NWS):
             mapTypes = {"hires": ("hires", (90, -89.75), (-180, 180), (-0.25,0.25)) }
     else:
-        cropsize = (200,360)
+        cropsize = (120,160)
         mapTypes = {"NA": ("NA", (80,30), (-45,45), (-0.25,0.25))}
         if(args.NWS):
-            mapTypes = {"hires": ("hires", (80, 30), (-145, -50), (-0.25,0.25)) }
+            mapTypes = {"hires": ("hires", (59.75, 30), (-50, -10), (-0.25,0.25)) }
     
     myLevelRange = np.arange(105,138,4)
 
@@ -179,7 +179,7 @@ def bilinear_interpolate(im, x, y):
 
 
 
-def getValAlongNormal(image, var, udir, vdir, length, border, grad):
+def getValAlongNormaloldd(image, var, udir, vdir, length, border, grad):
     directional = False
     avgVar = np.zeros((2*length+1, image.shape[2]))
     sqavgVar = np.zeros((2*length+1, image.shape[2]))
@@ -187,15 +187,18 @@ def getValAlongNormal(image, var, udir, vdir, length, border, grad):
     sqavgVarBuf = np.zeros((2*length+1))
     numPoints = np.zeros((image.shape[2]))
     blength = max(border,length)
-    filters = np.array([[[0,0,0],
+    filters = np.array([[[1,0,0],
+                        [0,1,0],
+                        [0,0,1]],
+
+                        [[0,0,0],
                         [1,1,1],
                         [0,0,0]],
+                        
                         [[0,1,0],
                         [0,1,0],
                         [0,1,0]],
-                        [[1,0,0],
-                        [0,1,0],
-                        [0,0,1]],
+
                         [[0,0,1],
                         [0,1,0],
                         [1,0,0]]])
@@ -261,11 +264,104 @@ def getValAlongNormal(image, var, udir, vdir, length, border, grad):
             sqavgVarBuf = bilinear_interpolate(var, pointsX, pointsY)*windAngleBuf
             tgtChannel = channel
             if(grad):
+                for x in range(len(avgVarBuf)-1):
+                    if(avgVarBuf[x+1]>3 and avgVarBuf[x] < -3):
+                        avgVarBuf[x+1]-=2*np.pi
+                    elif(avgVarBuf[x+1]<-3 and avgVarBuf[x] > 3):
+                        avgVarBuf[x+1]+=2*np.pi
                 avgVar[:,tgtChannel] += np.gradient(avgVarBuf)
                 sqavgVar[:,tgtChannel] += np.gradient(sqavgVarBuf)**2
             else:
                 avgVar[:,tgtChannel] += avgVarBuf
                 sqavgVar[:,tgtChannel] += sqavgVarBuf**2
+    return avgVar, sqavgVar, numPoints
+
+def getValAlongNormal(image, var, udir, vdir, length, border, grad):
+    directional = False
+    avgVar = np.zeros((2*length+1, image.shape[2]))
+    sqavgVar = np.zeros((2*length+1, image.shape[2]))
+    avgVarBuf = np.zeros((2*length+1))
+    sqavgVarBuf = np.zeros((2*length+1))
+    numPoints = np.zeros((image.shape[2]))
+    blength = max(border,length)
+    myImg = np.zeros((image.shape[0],image.shape[1],3))
+    for channel in range(image.shape[2]):
+        channelImage = image[:,:,channel]
+        dirx = ndimage.sobel(channelImage, axis = 1)
+        diry = ndimage.sobel(channelImage, axis = 0)
+        dirx = np.roll(dirx, 1, axis=1)
+        diry = np.roll(diry, 1, axis=0)
+
+        grads = np.array([dirx,diry])
+        dirx, diry = grads / (np.linalg.norm(grads, axis=0)+0.000001)
+        angle = np.angle(dirx+1j*diry)
+        wind = np.array([udir,vdir])
+        udir, vdir = wind / (np.linalg.norm(wind, axis=0)+0.0000001)
+        anglewind = np.angle(udir+1j*vdir)
+
+        validPoints = np.nonzero(channelImage[blength:-blength,blength:-blength])
+        localNumPoints = validPoints[0].shape[0]
+        numPoints[channel] += localNumPoints
+        
+        #myImg[:,:,1] += channelImage
+        for ppair in range(validPoints[0].shape[0]):
+            py, px = blength+validPoints[0][ppair], blength+validPoints[1][ppair]
+            negRang = 9
+            posRang = 9+1
+            myRegion = channelImage[py-negRang:py+posRang,px-negRang:px+posRang]
+            myNeighborhood = np.zeros(2)
+            lab = measure.label(myRegion>0.5)
+            ori = measure.regionprops(lab)[0].orientation
+            for mx in range(-negRang,posRang):
+                for my in range(-negRang,posRang):
+                    myVal = myRegion[my-negRang,mx-negRang]
+                    myVal *= myVal>0.3
+                    myDist = np.array([mx,my])
+                    if(abs(ori) > np.pi/4 and abs(ori) < 3*np.pi/4):
+                        if(mx < 0):
+                            myDist *= -1
+                    else:
+                        if(my < 0):
+                            myDist *= -1
+                    if my != 0 and mx != 0:
+                        myNeighborhood += myVal*myDist/np.linalg.norm(myDist)
+            myNeighborhood /= np.linalg.norm(myNeighborhood)
+            myYdir = myNeighborhood[0]
+            myXdir = myNeighborhood[1]
+            
+            # normalize direction
+            myLen = np.sqrt(myYdir*myYdir+myXdir*myXdir)
+            myXdir /= myLen
+            myYdir /= myLen
+            
+            direction = udir[py,px]*myXdir+vdir[py,px]*myYdir
+            pointsY = py-myYdir*np.arange(-length,length+1)
+            pointsX = px+myXdir*np.arange(-length,length+1)
+            
+            if(direction <= 0):
+                pointsX = np.flip(pointsX)
+                pointsY = np.flip(pointsY)
+            if(directional):
+                windAngleBuf = np.abs(np.cos(bilinear_interpolate(anglewind, pointsX, pointsY)-angle[py,px]))
+            else:
+                windAngleBuf = 1
+            #myImg[pointsY.astype(int), pointsX.astype(int),0] = 1
+            avgVarBuf = bilinear_interpolate(var, pointsX, pointsY)*windAngleBuf
+            sqavgVarBuf = bilinear_interpolate(var, pointsX, pointsY)*windAngleBuf
+            tgtChannel = channel
+            if(grad):
+                for x in range(len(avgVarBuf)-1):
+                    if(avgVarBuf[x+1]>3 and avgVarBuf[x] < -3):
+                        avgVarBuf[x+1]-=2*np.pi
+                    elif(avgVarBuf[x+1]<-3 and avgVarBuf[x] > 3):
+                        avgVarBuf[x+1]+=2*np.pi
+                avgVar[:,tgtChannel] += np.gradient(avgVarBuf)
+                sqavgVar[:,tgtChannel] += np.gradient(sqavgVarBuf)**2
+            else:
+                avgVar[:,tgtChannel] += avgVarBuf
+                sqavgVar[:,tgtChannel] += sqavgVarBuf**2
+    #imsave("myImg.png", myImg)
+    #exit(1)
     return avgVar, sqavgVar, numPoints
 
 
@@ -319,7 +415,11 @@ def performInference(model, loader, num_samples, parOpt, args):
             var = inputs[0,5*9+8]*np.sqrt(varsp)+meansp
         elif(args.calcVar == "wind"):
             # wind speed
-            var = torch.abs(udir+1j*vdir)*2
+            var = torch.abs(udir+1j*vdir)
+        elif(args.calcVar == "winddir"):
+            # wind speed
+            #grad = True
+            var = torch.angle(udir+1j*vdir)
         
         # Which kind of fronts should be tested (ML -> Network, WS -> WeatherService, OP -> over predicted (false positives), CP -> correct predicted (true positives, network oriented), 
         # NP -> not ptedicted (false negatives), CL correctly labeled (true positives, weather service oriented)
