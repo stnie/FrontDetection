@@ -387,7 +387,8 @@ def performInference(model, loader, num_samples, parOpt, args):
             outputs = torch.softmax(outputs, dim=-1)
             # remove all unlikely  or short fronts
             outputs = filterFronts(outputs.cpu().numpy(), border)
-            
+        
+
         #Hard coded, for derivatives
         meanu, varu = 1.27024432, 6.74232481e+01
         meanv, varv = 1.0213897e-01, 4.36244384e+01
@@ -397,7 +398,7 @@ def performInference(model, loader, num_samples, parOpt, args):
 
         udir = inputs[0,9*6+8]
         vdir = inputs[0,9*7+8]
-
+        
         # Generally no gradient (finite differences should be calculated)
         grad = False
 
@@ -419,6 +420,10 @@ def performInference(model, loader, num_samples, parOpt, args):
             # wind speed
             #grad = True
             var = torch.angle(udir+1j*vdir)
+        elif(args.calcVar == "10mwind"):
+            newfile = filename
+            tgt_latrange, tgt_lonrange = data_set.getCropRange(data_set.mapTypes["NWS"][1], data_set.mapTypes["NWS"][2], data_set.mapTypes["NWS"][3], 0)
+            var = self.era_extractor(filename, tgt_latrange, tgt_lonrange, 0, 0)
         
         # Which kind of fronts should be tested (ML -> Network, WS -> WeatherService, OP -> over predicted (false positives), CP -> correct predicted (true positives, network oriented), 
         # NP -> not ptedicted (false negatives), CL correctly labeled (true positives, weather service oriented)
