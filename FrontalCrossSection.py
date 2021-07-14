@@ -28,8 +28,10 @@ import matplotlib.pyplot as plt
 # Current Best
 # Medium Bottle Net, 32 Batchsize, BottleneckLayer 128 256 128, 3 levels, lr = 0.01, lines +- 1
 # ~ 45% validation loss 
-
+from skimage import measure
 from FrontPostProcessing import filterFronts
+import netCDF4
+
 
 
 class DistributedOptions():
@@ -408,8 +410,41 @@ def performInference(model, loader, num_samples, parOpt, args):
             var = torch.abs(udir+1j*vdir)
         elif(args.calcVar == "winddir"):
             # wind speed
-            #grad = True
+            grad = True
             var = torch.angle(udir+1j*vdir)
+        elif(args.calcVar == "10mwinddir"):
+            grad = True
+            #newFile = "/home/stefan/Secondary_Data/Binary-Fronten/era5rea/B20160101_00.nc"
+            year,month,day,hour = filename[0][:4],filename[0][4:6],filename[0][6:8],filename[0][9:11]
+            newFile = "/lustre/project/m2_jgu-w2w/ipaserver/ERA5/{0}/{1}/B{0}{1}{2}_{3}.nc".format(year,month,day,hour)
+            print(newFile)
+            rootgrp = netCDF4.Dataset(os.path.realpath(newFile), "r", format="NETCDF4", parallel=False)
+            tgt_latrange, tgt_lonrage = data_set.getCropRange(data_set.mapTypes["hires"][1], data_set.mapTypes["hires"][2], data_set.mapTypes["hires"][3], 0)
+            u10dir = rootgrp["u10"][0,int(90-tgt_latrange[0])*4:int(90-tgt_latrange[1]*4), int(tgt_lonrage[0])*4:int(tgt_lonrage[1])*4]
+            v10dir = rootgrp["v10"][0,int(90-tgt_latrange[0])*4:int(90-tgt_latrange[1]*4), int(tgt_lonrage[0])*4:int(tgt_lonrage[1])*4]
+            wind = torch.from_numpy(u10dir+1j*v10dir)
+            var = torch.angle(wind)
+            rootgrp.close()
+        elif(args.calcVar == "10mwind"):
+            #newFile = "/home/stefan/Secondary_Data/Binary-Fronten/era5rea/B20160101_00.nc"
+            year,month,day,hour = filename[0][:4],filename[0][4:6],filename[0][6:8],filename[0][9:11]
+            newFile = "/lustre/project/m2_jgu-w2w/ipaserver/ERA5/{0}/{1}/B{0}{1}{2}_{3}.nc".format(year,month,day,hour)
+            rootgrp = netCDF4.Dataset(os.path.realpath(newFile), "r", format="NETCDF4", parallel=False)
+            tgt_latrange, tgt_lonrage = data_set.getCropRange(data_set.mapTypes["hires"][1], data_set.mapTypes["hires"][2], data_set.mapTypes["hires"][3], 0)
+            u10dir = rootgrp["u10"][0,int(90-tgt_latrange[0])*4:int(90-tgt_latrange[1]*4), int(tgt_lonrage[0])*4:int(tgt_lonrage[1])*4]
+            v10dir = rootgrp["v10"][0,int(90-tgt_latrange[0])*4:int(90-tgt_latrange[1]*4), int(tgt_lonrage[0])*4:int(tgt_lonrage[1])*4]
+            wind = torch.from_numpy(u10dir+1j*v10dir)
+            var = torch.abs(wind)
+            rootgrp.close()
+        elif(args.calcVar == "precip"):
+            #newFile = "/home/stefan/Secondary_Data/Binary-Fronten/era5rea/B20160101_00.nc"
+            year,month,day,hour = filename[0][:4],filename[0][4:6],filename[0][6:8],filename[0][9:11]
+            newFile = "/lustre/project/m2_jgu-w2w/ipaserver/ERA5/{0}/{1}/B{0}{1}{2}_{3}.nc".format(year,month,day,hour)
+            rootgrp = netCDF4.Dataset(os.path.realpath(newFile), "r", format="NETCDF4", parallel=False)
+            tgt_latrange, tgt_lonrage = data_set.getCropRange(data_set.mapTypes["hires"][1], data_set.mapTypes["hires"][2], data_set.mapTypes["hires"][3], 0)
+            prec = rootgrp["ie"][0,int(90-tgt_latrange[0])*4:int(90-tgt_latrange[1]*4), int(tgt_lonrage[0])*4:int(tgt_lonrage[1])*4]
+            var = torch.from_numpy(prec)
+            rootgrp.close()
         
         # Which kind of fronts should be tested (ML -> Network, WS -> WeatherService, OP -> over predicted (false positives), CP -> correct predicted (true positives, network oriented), 
         # NP -> not ptedicted (false negatives), CL correctly labeled (true positives, weather service oriented)
