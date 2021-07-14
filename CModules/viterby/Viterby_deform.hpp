@@ -23,7 +23,6 @@ constexpr inline size_t binom(size_t n, size_t k) noexcept
 }
 
 float getGaussianValue(int x, int y, float sigma=1){
-    //return 1/(sqrt(2*M_PI)*sigma)*exp(-0.5 * (pow(x/sigma,2)+ pow(y/sigma,2)));
     return exp(-0.5 * (pow(x/sigma,2)+ pow(y/sigma,2)));
 }
 
@@ -261,7 +260,6 @@ std::pair<float,int> getScoreAndChannel(int r0, int c0, int r1, int c1, simple3D
             bestChannel = i;
         }
     }
-    //printf("%f\n", score);
 
     // get diff
     return std::pair<float,int>(bestScore, bestChannel);
@@ -371,7 +369,6 @@ simpleMatrix<int> getBestPath_(simpleMatrix<int>&& coords, simpleMatrix<T>&& ima
     float bestEndScore = 0;
 
     
-    //simpleMatrix<int> bestPath(data, coords.x, coords.y);
     for(int off = 0; off < totalDist*totalDist+1; ++off){
         if(bestScore[(totalDist*totalDist+1)*(coords.x-1)+off] > bestEndScore){
             bestEnd = off;
@@ -477,7 +474,6 @@ simpleMatrix<int> getBestPathBayes_(simpleMatrix<int>&& coords, simpleMatrix<T>&
     float bestEndScore = 0;
 
     
-    //simpleMatrix<int> bestPath(data, coords.x, coords.y);
     for(int off = 0; off < totalDist*totalDist+1; ++off){
         if(bestScore[(totalDist*totalDist+1)*(coords.x-1)+off] > bestEndScore){
             bestEnd = off;
@@ -597,7 +593,6 @@ simpleMatrix<int> getBestPathMultiChannel_(simpleMatrix<int>&& coords, simple3DM
     float bestEndScore = -10000;
 
     
-    //simpleMatrix<int> bestPath(data, coords.x, coords.y);
     for(int off = 0; off < totalDist*totalDist+1; ++off){
         if(bestScore[(totalDist*totalDist+1)*(coords.x-1)+off] > bestEndScore){
             bestEnd = off;

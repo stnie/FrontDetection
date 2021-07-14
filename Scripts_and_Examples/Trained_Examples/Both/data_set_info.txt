@@ -1,6 +1,6 @@
 WeatherFrontDataset
-data_dir :: str :: /localscratch/8996173/data :: end
-label_dir :: str :: /localscratch/8996173/label :: end
+data_dir :: str :: /some/path/to/data/ :: end
+label_dir :: str :: /some/path/to/label/ :: end
 map_types :: dict(str: tuple(str, tuple(float,float), tuple(float,float), tuple(float,float))) :: {'NA': ('NA', (75.0, 30.0), (-50.0, 40.0), (-0.25, 0.25), None), 'hires': ('hires', (75.0, 30.0), (-140.0, -55.0), (-0.25, 0.25), None)} :: end
 levelrange :: list(int) :: [105, 109, 113, 117, 121, 125, 129, 133, 137] :: end
 transforms :: obj :: (Compose(

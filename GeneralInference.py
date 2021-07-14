@@ -2,26 +2,18 @@ from FrontPostProcessing import filterFronts
 import numpy as np
 import torch
 import os
-import time
 
-from skimage import transform, img_as_ubyte, img_as_bool
 from skimage.io import imsave 
 from skimage import measure, morphology
-from scipy.ndimage import distance_transform_edt
 
 
-from torch.utils.data import Dataset, DataLoader, SubsetRandomSampler, BatchSampler, Sampler, SequentialSampler
-from torch.utils.data.distributed import DistributedSampler
-from torchvision import transforms, utils
-from torchvision.models.segmentation import deeplabv3_resnet101
-from torchvision.transforms import Compose
-from MyTransformations import RandomAffine, RandomCrop, FixedCrop, RandomErasing, GaussianNoise, RandomHorizontalCoordsFlip, RandomVerticalCoordsFlip
+from torch.utils.data import DataLoader, SequentialSampler
+
 from MyLossFunctions import *
-import random
 
 from Models.FDU3D import *
 
-from tqdm import tqdm, trange
+from tqdm import tqdm
 import argparse
 
 from era5dataset.FrontDataset import *
@@ -30,15 +22,10 @@ from era5dataset.EraExtractors import *
 
 from IOModules.csbReader import *
 
-from multiprocessing import Lock
-
 from NetInfoImport import *
 
 from FrontPostProcessing import filterFronts
 
-# Current Best
-# Medium Bottle Net, 32 Batchsize, BottleneckLayer 128 256 128, 3 levels, lr = 0.01, lines +- 1
-# ~ 45% validation loss 
 
 class CSIEvaluator():
     def __init__(self, args):
