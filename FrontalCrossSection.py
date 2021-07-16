@@ -18,7 +18,7 @@ from era5dataset.FrontDataset import *
 from era5dataset.EraExtractors import *
 
 from IOModules.csbReader import *
-
+from skimage.morphology import binary_dilation
 from NetInfoImport import *
 
 import matplotlib
@@ -29,6 +29,7 @@ import matplotlib.pyplot as plt
 # Medium Bottle Net, 32 Batchsize, BottleneckLayer 128 256 128, 3 levels, lr = 0.01, lines +- 1
 # ~ 45% validation loss 
 from skimage import measure
+from skimage.io import imsave
 from FrontPostProcessing import filterFronts
 import netCDF4
 
@@ -88,10 +89,10 @@ def setupDataset(args):
         if(args.NWS):
             mapTypes = {"hires": ("hires", (90, -89.75), (-180, 180), (-0.25,0.25)) }
     else:
-        cropsize = (120,160)
-        mapTypes = {"NA": ("NA", (80,30), (-45,45), (-0.25,0.25))}
+        cropsize = (120,140*4)
+        mapTypes = {"NA": ("NA", (76,30.25), (-50,40), (-0.25,0.25))}
         if(args.NWS):
-            mapTypes = {"hires": ("hires", (59.75, 30), (-50, -10), (-0.25,0.25)) }
+            mapTypes = {"hires": ("hires", (60.00, 30.25), (-141, -1), (-0.25,0.25)) }
     
     myLevelRange = np.arange(105,138,4)
 
@@ -268,7 +269,7 @@ def getValAlongNormaloldd(image, var, udir, vdir, length, border, grad):
                 sqavgVar[:,tgtChannel] += sqavgVarBuf**2
     return avgVar, sqavgVar, numPoints
 
-def getValAlongNormal(image, var, udir, vdir, length, border, grad):
+def getValAlongNormal(image, var, udir, vdir, length, border, grad, orientation):
     directional = False
     avgVar = np.zeros((2*length+1, image.shape[2]))
     sqavgVar = np.zeros((2*length+1, image.shape[2]))
@@ -276,7 +277,7 @@ def getValAlongNormal(image, var, udir, vdir, length, border, grad):
     sqavgVarBuf = np.zeros((2*length+1))
     numPoints = np.zeros((image.shape[2]))
     blength = max(border,length)
-    myImg = np.zeros((image.shape[0],image.shape[1],3))
+    myImg = np.zeros((image.shape[0],image.shape[1],4))
     for channel in range(image.shape[2]):
         channelImage = image[:,:,channel]
         dirx = ndimage.sobel(channelImage, axis = 1)
@@ -295,19 +296,20 @@ def getValAlongNormal(image, var, udir, vdir, length, border, grad):
         localNumPoints = validPoints[0].shape[0]
         numPoints[channel] += localNumPoints
         
-        #myImg[:,:,1] += channelImage
+        myImg[:,:,channel] += channelImage
         for ppair in range(validPoints[0].shape[0]):
             py, px = blength+validPoints[0][ppair], blength+validPoints[1][ppair]
             negRang = 9
             posRang = 9+1
             myRegion = channelImage[py-negRang:py+posRang,px-negRang:px+posRang]
+            if(len(np.nonzero(myRegion)[0])< 3):
+                continue
             myNeighborhood = np.zeros(2)
             lab = measure.label(myRegion>0.5)
             ori = measure.regionprops(lab)[0].orientation
             for mx in range(-negRang,posRang):
                 for my in range(-negRang,posRang):
-                    myVal = myRegion[my-negRang,mx-negRang]
-                    myVal *= myVal>0.3
+                    myVal = myRegion[my+negRang,mx+negRang]
                     myDist = np.array([mx,my])
                     if(abs(ori) > np.pi/4 and abs(ori) < 3*np.pi/4):
                         if(mx < 0):
@@ -315,8 +317,24 @@ def getValAlongNormal(image, var, udir, vdir, length, border, grad):
                     else:
                         if(my < 0):
                             myDist *= -1
-                    if my != 0 and mx != 0:
+                    if my != 0 or mx != 0:
                         myNeighborhood += myVal*myDist/np.linalg.norm(myDist)
+            if(np.linalg.norm(myNeighborhood) == 0):
+                print(myRegion)
+                print(ori)
+                for mx in range(-negRang,posRang):
+                    for my in range(-negRang,posRang):
+                        myVal = myRegion[my+negRang,mx+negRang]
+                        myDist = np.array([mx,my])
+                        if(abs(ori) > np.pi/4 and abs(ori) < 3*np.pi/4):
+                            if(mx < 0):
+                                myDist *= -1
+                        else:
+                            if(my < 0):
+                                myDist *= -1
+                        if(myVal>0):
+                            print(myDist)
+
             myNeighborhood /= np.linalg.norm(myNeighborhood)
             myYdir = myNeighborhood[0]
             myXdir = myNeighborhood[1]
@@ -326,10 +344,13 @@ def getValAlongNormal(image, var, udir, vdir, length, border, grad):
             myXdir /= myLen
             myYdir /= myLen
             
-            direction = udir[py,px]*myXdir+vdir[py,px]*myYdir
+            
             pointsY = py-myYdir*np.arange(-length,length+1)
             pointsX = px+myXdir*np.arange(-length,length+1)
-            
+            # get the mean wind along the normal
+            direction = [np.mean(bilinear_interpolate(udir, pointsX, pointsY)), np.mean(bilinear_interpolate(vdir, pointsX,pointsY))]
+            # get the dot product of mean wind along the normal and the normal, to determine whether or not both are in the same direction
+            direction = direction[0]*myXdir+direction[1]*myYdir
             if(direction <= 0):
                 pointsX = np.flip(pointsX)
                 pointsY = np.flip(pointsY)
@@ -337,23 +358,27 @@ def getValAlongNormal(image, var, udir, vdir, length, border, grad):
                 windAngleBuf = np.abs(np.cos(bilinear_interpolate(anglewind, pointsX, pointsY)-angle[py,px]))
             else:
                 windAngleBuf = 1
-            #myImg[pointsY.astype(int), pointsX.astype(int),0] = 1
+            myImg[pointsY.astype(int), pointsX.astype(int),:] += 1
             avgVarBuf = bilinear_interpolate(var, pointsX, pointsY)*windAngleBuf
             sqavgVarBuf = bilinear_interpolate(var, pointsX, pointsY)*windAngleBuf
             tgtChannel = channel
-            if(grad):
+            if(grad and orientation):
                 for x in range(len(avgVarBuf)-1):
-                    if(avgVarBuf[x+1]>3 and avgVarBuf[x] < -3):
+                    if(avgVarBuf[x+1]>2 and avgVarBuf[x] < -2):
                         avgVarBuf[x+1]-=2*np.pi
-                    elif(avgVarBuf[x+1]<-3 and avgVarBuf[x] > 3):
+                    elif(avgVarBuf[x+1]<-2 and avgVarBuf[x] > 2):
                         avgVarBuf[x+1]+=2*np.pi
-                avgVar[:,tgtChannel] += np.gradient(avgVarBuf)
+                    
+                avgVar[:,tgtChannel] += np.abs(np.cumsum(np.gradient(avgVarBuf)))
+
                 sqavgVar[:,tgtChannel] += np.gradient(sqavgVarBuf)**2
+            elif(grad and not orientation):
+                avgVar[:,tgtChannel] += np.gradient(avgVarBuf)
             else:
                 avgVar[:,tgtChannel] += avgVarBuf
                 sqavgVar[:,tgtChannel] += sqavgVarBuf**2
-    #imsave("myImg.png", myImg)
-    #exit(1)
+    imsave("myImgwco.png", myImg[:,:,:3])
+    imsave("myImgcos.png", myImg[:,:,1:])
     return avgVar, sqavgVar, numPoints
 
 
@@ -364,8 +389,14 @@ def performInference(model, loader, num_samples, parOpt, args):
     avgVar = np.zeros((2*length+1, out_channels))
     sqavgVar = np.zeros((2*length+1, out_channels))
     numPoints = np.zeros((out_channels))
+    skip = 0#31*4+28*4+31*4+30*4+31*4+30*4+31*4
+    tmp = np.zeros((120,140*4))
+    FEvC = 0
+    EvC = 0
     for idx, data in enumerate(tqdm(loader, desc ='eval'), 0):
-        if(idx == num_samples):
+        if idx<skip:
+            continue
+        if(idx == num_samples+skip):
             break
         inputs, labels, filename = data
         inputs = inputs.to(device = parOpt.device, non_blocking=False)
@@ -380,6 +411,7 @@ def performInference(model, loader, num_samples, parOpt, args):
             outputs = model(tgtIn)
             outputs = outputs.permute(0, 2, 3, 1)
             outputs = torch.softmax(outputs, dim=-1)
+            outputs[0,:,:,0] = 1 - outputs[0,:,:,0]
             # remove all unlikely  or short fronts
             outputs = filterFronts(outputs.cpu().numpy(), border)
             
@@ -395,6 +427,12 @@ def performInference(model, loader, num_samples, parOpt, args):
 
         # Generally no gradient (finite differences should be calculated)
         grad = False
+        orientation = False
+
+        data_set = loader.dataset
+        no = data_set.removePrefix
+        year,month,day,hour = filename[0][no:no+4],filename[0][no+4:no+6],filename[0][no+6:no+8],filename[0][no+9:no+11]
+        print(year,month,day,hour)
 
         # determine variable, which should be evaluated
         if(args.calcVar == "t" or args.calcVar == "dt"):
@@ -407,44 +445,88 @@ def performInference(model, loader, num_samples, parOpt, args):
             var = inputs[0,5*9+8]*np.sqrt(varsp)+meansp
         elif(args.calcVar == "wind"):
             # wind speed
-            var = torch.abs(udir+1j*vdir)
+            var = torch.abs(udir+1j*vdir).cpu().numpy()
+            tmp = var>8.2
+            var = np.linalg.norm(np.gradient(var), axis=0)>3
+            var *= tmp
+            outputs[0,:,:,1] = var
+            outputs[0,:,:,2] = var
+            tmp = outputs[0,:,:,0]*1
+            for _ in range(10):
+                outputs[0,:,:,0] = binary_dilation(outputs[0,:,:,0])
+            outputs[0,:,:,0] += 2*tmp
+            EvC += len(np.nonzero(var)[0])
+            FEvC += len(np.nonzero(var*outputs[0,:,:,0])[0])
+            print(FEvC / EvC)
+            imsave("windp.png",outputs[0,border:-border,border:-border,:3])
+            #outputs[0,:,:,2] = prec
+            #imsave("precip2.png",outputs[0,:,:,2:])
+            continue
         elif(args.calcVar == "winddir"):
             # wind speed
             grad = True
-            var = torch.angle(udir+1j*vdir)
+            orientation = True
+            var = torch.angle(udir+1j*vdir).cpu().numpy()
+            var = np.linalg.norm(np.gradient(var), axis = 0)
+            var *= var<5
+            outputs[0,:,:,1] = var
+            outputs[0,:,:,2] = var
+            tmp = outputs[0,:,:,0]*1
+            for _ in range(10):
+                outputs[0,:,:,0] = binary_dilation(outputs[0,:,:,0])
+            outputs[0,:,:,0] += 2*tmp
+            imsave("windp.png",outputs[0,border:-border,border:-border,:3])
+            exit(1)
+
         elif(args.calcVar == "10mwinddir"):
             grad = True
+            orientation = True
             #newFile = "/home/stefan/Secondary_Data/Binary-Fronten/era5rea/B20160101_00.nc"
-            year,month,day,hour = filename[0][:4],filename[0][4:6],filename[0][6:8],filename[0][9:11]
+            
             newFile = "/lustre/project/m2_jgu-w2w/ipaserver/ERA5/{0}/{1}/B{0}{1}{2}_{3}.nc".format(year,month,day,hour)
             print(newFile)
             rootgrp = netCDF4.Dataset(os.path.realpath(newFile), "r", format="NETCDF4", parallel=False)
             tgt_latrange, tgt_lonrage = data_set.getCropRange(data_set.mapTypes["hires"][1], data_set.mapTypes["hires"][2], data_set.mapTypes["hires"][3], 0)
-            u10dir = rootgrp["u10"][0,int(90-tgt_latrange[0])*4:int(90-tgt_latrange[1]*4), int(tgt_lonrage[0])*4:int(tgt_lonrage[1])*4]
-            v10dir = rootgrp["v10"][0,int(90-tgt_latrange[0])*4:int(90-tgt_latrange[1]*4), int(tgt_lonrage[0])*4:int(tgt_lonrage[1])*4]
+            u10dir = rootgrp["u10"][0,int(90-tgt_latrange[0])*4:int(90-tgt_latrange[1])*4, int(tgt_lonrage[0])*4:int(tgt_lonrage[1])*4]
+            v10dir = rootgrp["v10"][0,int(90-tgt_latrange[0])*4:int(90-tgt_latrange[1])*4, int(tgt_lonrage[0])*4:int(tgt_lonrage[1])*4]
             wind = torch.from_numpy(u10dir+1j*v10dir)
             var = torch.angle(wind)
             rootgrp.close()
         elif(args.calcVar == "10mwind"):
             #newFile = "/home/stefan/Secondary_Data/Binary-Fronten/era5rea/B20160101_00.nc"
-            year,month,day,hour = filename[0][:4],filename[0][4:6],filename[0][6:8],filename[0][9:11]
             newFile = "/lustre/project/m2_jgu-w2w/ipaserver/ERA5/{0}/{1}/B{0}{1}{2}_{3}.nc".format(year,month,day,hour)
             rootgrp = netCDF4.Dataset(os.path.realpath(newFile), "r", format="NETCDF4", parallel=False)
             tgt_latrange, tgt_lonrage = data_set.getCropRange(data_set.mapTypes["hires"][1], data_set.mapTypes["hires"][2], data_set.mapTypes["hires"][3], 0)
-            u10dir = rootgrp["u10"][0,int(90-tgt_latrange[0])*4:int(90-tgt_latrange[1]*4), int(tgt_lonrage[0])*4:int(tgt_lonrage[1])*4]
-            v10dir = rootgrp["v10"][0,int(90-tgt_latrange[0])*4:int(90-tgt_latrange[1]*4), int(tgt_lonrage[0])*4:int(tgt_lonrage[1])*4]
+            u10dir = rootgrp["u10"][0,int(90-tgt_latrange[0])*4:int(90-tgt_latrange[1])*4, int(tgt_lonrage[0])*4:int(tgt_lonrage[1])*4]
+            v10dir = rootgrp["v10"][0,int(90-tgt_latrange[0])*4:int(90-tgt_latrange[1])*4, int(tgt_lonrage[0])*4:int(tgt_lonrage[1])*4]
             wind = torch.from_numpy(u10dir+1j*v10dir)
             var = torch.abs(wind)
             rootgrp.close()
         elif(args.calcVar == "precip"):
-            #newFile = "/home/stefan/Secondary_Data/Binary-Fronten/era5rea/B20160101_00.nc"
-            year,month,day,hour = filename[0][:4],filename[0][4:6],filename[0][6:8],filename[0][9:11]
-            newFile = "/lustre/project/m2_jgu-w2w/ipaserver/ERA5/{0}/{1}/B{0}{1}{2}_{3}.nc".format(year,month,day,hour)
+            newFile = "/home/stefan/Secondary_Data/Binary-Fronten/era5rea/precip20160101_00.nc"
+            #newFile = "/lustre/project/m2_jgu-w2w/ipaserver/ERA5/{0}/{1}/precip{0}{1}{2}_{3}.nc".format(year,month,day,hour)
             rootgrp = netCDF4.Dataset(os.path.realpath(newFile), "r", format="NETCDF4", parallel=False)
             tgt_latrange, tgt_lonrage = data_set.getCropRange(data_set.mapTypes["hires"][1], data_set.mapTypes["hires"][2], data_set.mapTypes["hires"][3], 0)
-            prec = rootgrp["ie"][0,int(90-tgt_latrange[0])*4:int(90-tgt_latrange[1]*4), int(tgt_lonrage[0])*4:int(tgt_lonrage[1])*4]
+            prec = rootgrp["tp"][0,int(90-tgt_latrange[0])*4:int(90-tgt_latrange[1])*4, int(tgt_lonrage[0])*4:int(tgt_lonrage[1])*4]
             var = torch.from_numpy(prec)
+            print(prec.shape)
+            prec = prec>0
+            outputs[0,:,:,1] = prec
+            outputs[0,:,:,2] = prec
+            tmp += outputs[0,:,:,0]*1
+            outputs[0,:,:,0] = tmp*1
+            for _ in range(10):
+                outputs[0,:,:,0] = binary_dilation(outputs[0,:,:,0])
+            precEv = np.nonzero(prec)
+            precFrontEv = np.nonzero(prec*outputs[0,:,:,0])
+            print(len(precFrontEv[0])/len(precEv[0]))
+            outputs[0,:,:,0] += 2*tmp
+            imsave("precip.png",outputs[0,border:-border,border:-border,:3])
+            #outputs[0,:,:,2] = prec
+            #imsave("precip2.png",outputs[0,:,:,2:])
+            exit(1)
             rootgrp.close()
+            continue
         
         # Which kind of fronts should be tested (ML -> Network, WS -> WeatherService, OP -> over predicted (false positives), CP -> correct predicted (true positives, network oriented), 
         # NP -> not ptedicted (false negatives), CL correctly labeled (true positives, weather service oriented)
@@ -478,7 +560,7 @@ def performInference(model, loader, num_samples, parOpt, args):
                     distImg = distance_transform_edt(1-(outputs[:,:,channel]), return_distances = True, return_indices = False) <= 3
                     frontImage[:,:,channel] = frontImage[:,:,channel]*distImg
         
-        curravg, currsqavg, currnumPoints = getValAlongNormal(frontImage, var.cpu().numpy(), udir.cpu().numpy(), vdir.cpu().numpy(), length, border, grad)
+        curravg, currsqavg, currnumPoints = getValAlongNormal(frontImage, var.cpu().numpy(), udir.cpu().numpy(), vdir.cpu().numpy(), length, border, grad, orientation)
         avgVar += curravg
         sqavgVar += currsqavg
         numPoints += currnumPoints

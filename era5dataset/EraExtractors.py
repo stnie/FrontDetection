@@ -35,9 +35,9 @@ class ETHEraExtractor():
 # EraExtractor that inverses gradients if a corresponding flip occurs during transformation
 class DerivativeFlippingAwareEraExtractor():
     # Determine which variables should be extracted
-    def __init__(self, variables = ['t','q','u','v','w'], horizontal_indices = None, vertical_indices = None, fliprate = 0.5, horizontal_flipPos = 0, vertical_flipPos = 1, normType = 0, sharedObj = None):
+    def __init__(self, variables = ['t','q','u','v','w'], horizontal_indices = None, vertical_indices = None, fliprate = 0.5, horizontal_flipPos = 0, vertical_flipPos = 1, normType = 0, sharedObj = None, ftype = 0):
         # Create a CDF Reader using h5py and min max normalization
-        self.reader = CDFReader(0, normType = normType, sharedObj = sharedObj)
+        self.reader = CDFReader(ftype, normType = normType, sharedObj = sharedObj)
         
         self.variables = variables
         latoffs = []

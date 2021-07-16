@@ -30,6 +30,7 @@ class ETHReader:
         mylatRange -= 90*2
         img = img[:, mylatRange, :]
         img = img[:,:,mylonRange]
+        rootgrp.close()
         #img = skeletonize(img>0)*img
         return img
 

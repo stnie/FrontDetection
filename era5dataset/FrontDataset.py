@@ -162,7 +162,7 @@ class WeatherFrontDataset(Dataset):
                     front_name = datanameToLabelname(filename, self.mapTypes, self.removePrefix)
             mapType, front_name = self.getProjectionTypeAndFilePath(front_name)
             # To distinguish the output name
-            filename = os.path.splitext(filename)[0]+mapType+os.path.splitext(filename)[1]
+            #filename = os.path.splitext(filename)[0]+mapType+os.path.splitext(filename)[1]
             # Read Label Data
             #print("label:", filename)
             #print(front_name, mapType, filename)
