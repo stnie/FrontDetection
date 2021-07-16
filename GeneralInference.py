@@ -396,7 +396,7 @@ def setupDataset(args):
         mapTypes = {"NA": ("NA", (90,-89.75), (-180,180), (-stepsize, stepsize), None) }
         if(args.NWS):
             mapTypes = {"hires": ("hires", (90, -89.75), (-180, 180), (-stepsize,stepsize), None) }
-    else:
+    elif(not args.fullsize and not args.halfRes):
         #cropsize = (200,360)
         #mapTypes = {"NA": ("NA", (80,30.25), (-45,45), (-stepsize, stepsize), None)}
         #if(args.NWS):
@@ -407,6 +407,14 @@ def setupDataset(args):
         if(args.NWS):
             cropsize = (184, 344) 
             mapTypes = {"hires": ("hires", (76, 30.25), (-141, -55), (-stepsize,stepsize), None) }
+    # Comparison against ETH only uses midlatitudes
+    elif(args.halfRes and not args.fullsize):
+        cropsize = (34*4,360)
+        mapTypes = {"NA": ("NA", (64,30.25), (-50,40), (-stepsize, stepsize), None)}
+        if(args.NWS):
+            cropsize = (34*4, 344) 
+            mapTypes = {"hires": ("hires", (64, 30.25), (-141, -55), (-stepsize,stepsize), None) }
+
     # ETH uses half Res before
     if(args.ETH):
         cropsize=(cropsize[0]//2,cropsize[1]//2)
