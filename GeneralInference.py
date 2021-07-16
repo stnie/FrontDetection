@@ -9,7 +9,7 @@ from skimage import measure, morphology
 
 from torch.utils.data import DataLoader, SequentialSampler
 
-from MyLossFunctions import *
+#from MyLossFunctions import *
 
 from Models.FDU3D import *
 
@@ -396,11 +396,25 @@ def setupDataset(args):
         mapTypes = {"NA": ("NA", (90,-89.75), (-180,180), (-stepsize, stepsize), None) }
         if(args.NWS):
             mapTypes = {"hires": ("hires", (90, -89.75), (-180, 180), (-stepsize,stepsize), None) }
-    else:
-        cropsize = (200,360)
-        mapTypes = {"NA": ("NA", (80,30.25), (-45,45), (-stepsize, stepsize), None)}
+    elif(not args.fullsize and not args.halfRes):
+        #cropsize = (200,360)
+        #mapTypes = {"NA": ("NA", (80,30.25), (-45,45), (-stepsize, stepsize), None)}
+        #if(args.NWS):
+        #    cropsize = (200, 360) 
+        #    mapTypes = {"hires": ("hires", (80, 30.25), (-140, -50), (-stepsize,stepsize), None) }
+        cropsize = (184,360)
+        mapTypes = {"NA": ("NA", (76,30.25), (-50,40), (-stepsize, stepsize), None)}
         if(args.NWS):
-            mapTypes = {"hires": ("hires", (80, 30.25), (-140, -50), (-stepsize,stepsize), None) }
+            cropsize = (184, 344) 
+            mapTypes = {"hires": ("hires", (76, 30.25), (-141, -55), (-stepsize,stepsize), None) }
+    # Comparison against ETH only uses midlatitudes
+    elif(args.halfRes and not args.fullsize):
+        cropsize = (34*4,360)
+        mapTypes = {"NA": ("NA", (64,30.25), (-50,40), (-stepsize, stepsize), None)}
+        if(args.NWS):
+            cropsize = (34*4, 344) 
+            mapTypes = {"hires": ("hires", (64, 30.25), (-141, -55), (-stepsize,stepsize), None) }
+
     # ETH uses half Res before
     if(args.ETH):
         cropsize=(cropsize[0]//2,cropsize[1]//2)
@@ -435,7 +449,7 @@ def setupDataset(args):
     if(ETH):
         myEraExtractor = ETHEraExtractor()
     # Create Dataset
-    data_set = WeatherFrontDataset(data_dir=data_fold, label_dir=label_fold, mapTypes = mapTypes, levelRange = myLevelRange, transform=myTransform, outSize=cropsize, labelThickness= labelThickness, label_extractor = myLabelExtractor, era_extractor = myEraExtractor, asCoords = args.elastic, has_subfolds = (False,False))
+    data_set = WeatherFrontDataset(data_dir=data_fold, label_dir=label_fold, mapTypes = mapTypes, levelRange = myLevelRange, transform=myTransform, outSize=cropsize, labelThickness= labelThickness, label_extractor = myLabelExtractor, era_extractor = myEraExtractor, asCoords = args.elastic, has_subfolds = (not (args.ETH),False), removePrefix = 1+(not args.ETH)*7)
     return data_set
 
 def setupDataLoader(data_set, args):
