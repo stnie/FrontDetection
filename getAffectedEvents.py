@@ -135,7 +135,7 @@ def setupDataset(args):
     
 
     # Create Dataset
-    data_set = WeatherFrontDataset(data_dir=data_fold, label_dir=label_fold, mapTypes = mapTypes, levelRange = myLevelRange, transform=myTransform, outSize=cropsize, labelThickness= labelThickness, label_extractor = myLabelExtractor, era_extractor = myEraExtractor, has_subfolds = (False, False), asCoords = False, removePrefix = 0)
+    data_set = WeatherFrontDataset(data_dir=data_fold, label_dir=label_fold, mapTypes = mapTypes, levelRange = myLevelRange, transform=myTransform, outSize=cropsize, labelThickness= labelThickness, label_extractor = myLabelExtractor, era_extractor = myEraExtractor, has_subfolds = (not args.ETH, False), asCoords = False, removePrefix = 1+(not args.ETH)*2)
     return data_set
 
 
@@ -184,10 +184,10 @@ def performInference(model, loader, num_samples, parOpt, args):
     # number of iterations of dilation
     Boxsize = 10
 
-    Front_Event_count = 0
+    Front_Event_count = np.zeros((5))
     Event_count = 0
     Extreme_Event_count = 0
-    Front_Extreme_Event_count = 0
+    Front_Extreme_Event_count = np.zeros((5))
     Front_count = 0
 
     data_set = loader.dataset
@@ -196,7 +196,7 @@ def performInference(model, loader, num_samples, parOpt, args):
 
     tgtvar = ""
     if args.calcVar == "precip":
-        pct_file = "/home/stefan/Secondary_Data/Binary-Fronten/era5rea/Precipitation_tp_99_percentile_2016.nc"#/lustre/project/m2_jgu-binaryhpc/Front_Detection_Data/PercentileData/percentile99.nc"
+        pct_file = "/lustre/project/m2_jgu-binaryhpc/Front_Detection_Data/PercentileData/Precipitation_tp_99_percentile.nc"
         tgtvar = "tp"
     elif args.calcVar == "10mwind":
         pct_file = ""
@@ -207,16 +207,26 @@ def performInference(model, loader, num_samples, parOpt, args):
 
     rootgrp = netCDF4.Dataset(os.path.realpath(pct_file), "r", format="NETCDF4", parallel=False)
     tgt_latrange, tgt_lonrage = data_set.getCropRange(data_set.mapTypes[mapType][1], data_set.mapTypes[mapType][2], data_set.mapTypes[mapType][3], 0)
-    percentile_99 = rootgrp[tgtvar][0,int(90-tgt_latrange[0])*4:int(90-tgt_latrange[1])*4, int(tgt_lonrage[0])*4:int(tgt_lonrage[1])*4]
+    # the files have lat 90 - -90,   lon 0 - 360
+    # => we need to offset lonrange
+    percentile_99 = np.zeros((abs(int(tgt_latrange[0])-int(tgt_latrange[1]))*4, abs(int(tgt_lonrage[1])-int(tgt_lonrage[0]))*4))
+    if(tgt_lonrage[0] < 0 and tgt_lonrage[1] >= 0):
+        percentile_99[:,:-int(tgt_lonrage[0])*4] =  rootgrp["tp"][0,int(90-tgt_latrange[0])*4:int(90-tgt_latrange[1])*4, int(tgt_lonrage[0])*4:]
+        percentile_99[:,-int(tgt_lonrage[0])*4:] = rootgrp["tp"][0,int(90-tgt_latrange[0])*4:int(90-tgt_latrange[1])*4, :int(tgt_lonrage[1])*4]
+    else:
+        percentile_99 = rootgrp[tgtvar][0,int(90-tgt_latrange[0])*4:int(90-tgt_latrange[1])*4, int(tgt_lonrage[0])*4:int(tgt_lonrage[1])*4]
     rootgrp.close()
 
-    total_events = np.zeros((percentile_99.shape[0], percentile_99.shape[1]))
-    total_extreme_events = np.zeros((percentile_99.shape[0], percentile_99.shape[1]))
-    total_front_events = np.zeros((percentile_99.shape[0], percentile_99.shape[1]))
-    total_front_extreme_events = np.zeros((percentile_99.shape[0], percentile_99.shape[1]))
-    total_fronts = np.zeros((percentile_99.shape[0], percentile_99.shape[1]))
+    total_events = np.zeros((12,percentile_99.shape[0]-2*border, percentile_99.shape[1]- 2*border))
+    total_extreme_events = np.zeros_like(total_events)
+    total_front_events = np.zeros((12,5,percentile_99.shape[0]-2*border, percentile_99.shape[1]- 2*border))
+    total_front_extreme_events = np.zeros_like(total_front_events)
+    total_fronts = np.zeros_like(total_front_events)
 
     skip = 0
+    var = np.zeros((percentile_99.shape[0], percentile_99.shape[1]))
+    # holds all outputs for this dataset
+    #quick_out = np.zeros((percentile_99.shape[0], percentile_99.shape[1], 5), dtype = np.bool)
     for idx, data in enumerate(tqdm(loader, desc ='eval'), 0):
         if idx<skip:
             continue
@@ -224,20 +234,37 @@ def performInference(model, loader, num_samples, parOpt, args):
             break
         inputs, labels, filename = data
         inputs = inputs.to(device = parOpt.device, non_blocking=False)
-        labels = labels.to(device = parOpt.device, non_blocking=False)
-        # remove all short labels caused by cropping
-        labels = filterFronts(labels.cpu().numpy(), border)
+        if(not (labels is None)):
+            labels = labels.to(device = parOpt.device, non_blocking=False)
+            # remove all short labels caused by cropping
+            labels = filterFronts(labels.cpu().numpy(), border)
         _, outputs = inferResults(model, inputs, args)
-        
+
+
+        #write out all files
+        #quick_out[:, : ,: ] = outputs[0,:,:,:].astype(np.bool)
+        #out_file = "/lustre/project/m2_jgu-binaryhpc/Front_Detection_Data/Results2016/"+filename[0][no:]
+        #quick_out.tofile(out_file)
+        #if(idx == num_samples-1):
+        #    exit(1)
+        #continue
         year,month,day,hour = filename[0][no:no+4],filename[0][no+4:no+6],filename[0][no+6:no+8],filename[0][no+9:no+11]
+
         
         if args.calcVar == "precip":
             # Get Corresponding file with data
             newFile = "/lustre/project/m2_jgu-w2w/ipaserver/ERA5/{0}/{1}/precip{0}{1}{2}_{3}.nc".format(year,month,day,hour)
-            newFile = "/home/stefan/Secondary_Data/Binary-Fronten/era5rea/precip20160101_00.nc"
+            #newFile = "/home/stefan/Secondary_Data/Binary-Fronten/era5rea/precip20160101_00.nc"
             rootgrp = netCDF4.Dataset(os.path.realpath(newFile), "r", format="NETCDF4", parallel=False)
             tgt_latrange, tgt_lonrage = data_set.getCropRange(data_set.mapTypes[mapType][1], data_set.mapTypes[mapType][2], data_set.mapTypes[mapType][3], 0)
-            var = rootgrp["tp"][0,int(90-tgt_latrange[0])*4:int(90-tgt_latrange[1])*4, int(tgt_lonrage[0])*4:int(tgt_lonrage[1])*4]
+            if(tgt_lonrage[0] < 0 and tgt_lonrage[1] >= 0):
+                var[:,:-int(tgt_lonrage[0])*4] =  rootgrp["tp"][0,int(90-tgt_latrange[0])*4:int(90-tgt_latrange[1])*4, int(tgt_lonrage[0])*4:]
+                var[:,-int(tgt_lonrage[0])*4:] = rootgrp["tp"][0,int(90-tgt_latrange[0])*4:int(90-tgt_latrange[1])*4, :int(tgt_lonrage[1])*4]
+            else:
+                var = rootgrp["tp"][0,int(90-tgt_latrange[0])*4:int(90-tgt_latrange[1])*4, int(tgt_lonrage[0])*4:int(tgt_lonrage[1])*4]
+            print(int(90-tgt_latrange[0])*4, int(90-tgt_latrange[1])*4, int(tgt_lonrage[0])*4, int(tgt_lonrage[1])*4)
+            print("was:", tgt_latrange[0], tgt_latrange[1], tgt_lonrage[0], tgt_lonrage[1])
+
             rootgrp.close()
         elif(args.calcVar == "10mwinddir"):
             newFile = "/lustre/project/m2_jgu-w2w/ipaserver/ERA5/{0}/{1}/B{0}{1}{2}_{3}.nc".format(year,month,day,hour)
@@ -256,46 +283,58 @@ def performInference(model, loader, num_samples, parOpt, args):
             var = np.abs(u10dir+1j*v10dir)
             rootgrp.close()
 
+        monthID = int(month)-1
         events = (var > 0) *1
         extreme_events = var > percentile_99
-        front = outputs[0,:,:,0]
+        # crop the outer area which is not correctly predicted
+        events = events[border:-border, border:-border]
+        extreme_events = extreme_events[border:-border, border:-border]
+        #aggregation = var[border:-border, border:-border]
+        total_events[monthID] += events*1
+        total_extreme_events[monthID] += extreme_events*1
+        #total_agg[monthID] += aggregation
         # Count Events
         Event_count += len(np.nonzero(events)[0])
         # Count Extreme Events
         Extreme_Event_count += len(np.nonzero(extreme_events)[0])
-        # Widen Fronts according to boxsize
-        for _ in range(Boxsize):
-            front = morphology.binary_dilation(front)
-        #
-        total_events += events*1
-        total_extreme_events += extreme_events*1
+        
+        # for each type of front
+        for ftype in range(5):
+            front = outputs[0,border:-border,border:-border,ftype]#.cpu().numpy()
+            # Widen Fronts according to boxsize
+            for _ in range(Boxsize):
+                front = morphology.binary_dilation(front)
 
-        # Count Events associated with a Front
-        front_events = events*front
-        front_extreme_events = extreme_events * front
-        Front_Event_count += len(np.nonzero(front_events)[0])
-        Front_Extreme_Event_count += len(np.nonzero(front_extreme_events)[0])
+            # Count Events associated with a Front
+            front_events = events*front
+            front_extreme_events = extreme_events * front
+            #front_agg = aggregation*front
+            Front_Event_count[ftype] += len(np.nonzero(front_events)[0])
+            Front_Extreme_Event_count[ftype] += len(np.nonzero(front_extreme_events)[0])
+            
 
-        total_front_events += front_events*1
-        total_front_extreme_events += front_extreme_events*1
+            total_front_events[monthID, ftype] += front_events*1
+            total_front_extreme_events[monthID, ftype] += front_extreme_events*1
+            total_fronts[monthID, ftype] += front*1
+            #total_front_agg[monthID, ftype] += front_agg
+        
 
-        total_fronts += front*1
-        if(Event_count > 0):
-            print(Front_Event_count / Event_count)
-        else:
-            print("No Events")
-        if(Extreme_Event_count > 0):
-            print(Front_Extreme_Event_count / Extreme_Event_count)
-        else:
-            print("No Extreme Events")
+        #if(Event_count > 0):
+        #    print(Front_Event_count / Event_count)
+        #else:
+        #    print("No Events")
+        #if(Extreme_Event_count > 0):
+        #    print(Front_Extreme_Event_count / Extreme_Event_count, flush = True)
+        #else:
+        #    print("No Extreme Events", flush = True)
     if(Event_count > 0):
         print("matched Front and Event:", Front_Event_count, "total events:", Event_count, "ratio:", Front_Event_count / Event_count)
     else:
         print("No Events")
     if(Extreme_Event_count > 0):
-        print("matched Front and Extreme Event:", Front_Extreme_Event_count, "total extreme events:", Extreme_Event_count, "ration", Front_Extreme_Event_count/Extreme_Event_count)
+        print("matched Front and Extreme Event:", Front_Extreme_Event_count, "total extreme events:", Extreme_Event_count, "ration", Front_Extreme_Event_count/Extreme_Event_count, flush = True)
     else:
-        print("No Extreme Events")
+        print("No Extreme Events", flush = True)
 
     return [Event_count, Extreme_Event_count, Front_Event_count, Front_Extreme_Event_count], [total_events, total_extreme_events, total_front_events, total_front_extreme_events, total_fronts]
 
@@ -372,13 +411,13 @@ if __name__ == "__main__":
     FEn = os.path.join(name, "front_events")
     FEEn = os.path.join(name, "front_extreme_events")
     Frn = os.path.join(name, "fronts")
-    imsave(En+".png", Ei)
-    imsave(EEn+".png", EEi)
-    imsave(FEn+".png", FEi)
-    imsave(FEEn+".png", FEEi)
-    imsave(Frn+".png", Fi)
-    print(Ei.shape)
-    print(Ei)
+    #imsave(En+".png", Ei)
+    #imsave(EEn+".png", EEi)
+    #imsave(FEn+".png", FEi)
+    #imsave(FEEn+".png", FEEi)
+    #imsave(Frn+".png", Fi)
+    #print(Ei.shape)
+    #print(Ei)
     Ei.tofile(En+".bin")
     EEi.tofile(EEn+".bin")
     FEi.tofile(FEn+".bin")

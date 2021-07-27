@@ -88,9 +88,11 @@ class WeatherFrontDataset(Dataset):
             for fold in os.listdir(self.data_dir):
                 for filen in os.listdir(os.path.join(self.data_dir, fold)):
                     if("B20" in filen):
-                        pass
+                        continue
                     if(self.removePrefix == 8 and not ( "_00" in filen or "_06" in filen or "_12" in filen or "_18" in filen)):
-                        pass
+                        continue
+                    if(self.removePrefix == 3 and not "bml" in filen):
+                        continue
                     else:
                         # if the dataset extracts labels, check if the corresponding labels exist
                         if(self.has_label):
@@ -109,6 +111,8 @@ class WeatherFrontDataset(Dataset):
         else:
             self.fileList = []
             for filen in os.listdir(self.data_dir):
+                if("B20" in filen):
+                    continue
                 if(self.has_label):
                     potLabel = datanameToLabelname(filen, self.mapTypes, self.removePrefix)
                     labelExists = False

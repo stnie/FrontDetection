@@ -24,7 +24,7 @@ from IOModules.csbReader import *
 
 from NetInfoImport import *
 
-from FrontPostProcessing import filterFronts
+from FrontPostProcessing import filterFronts, filterFrontsFreeBorder
 
 
 class CSIEvaluator():
@@ -41,14 +41,18 @@ class CSIEvaluator():
         else:
             pixPerDeg = 4
             self.res = (-0.25, 0.25)
-        self.northBorder = self.border*pixPerDeg + 5*pixPerDeg
+        self.northBorder = (self.border+1)*pixPerDeg
         self.southBorder = self.border*pixPerDeg
-        self.eastBorder = self.border*pixPerDeg  + 5*pixPerDeg
+        self.eastBorder = self.border*pixPerDeg
         self.westBorder = self.border*pixPerDeg
+        northOff = self.border+15
+        if(self.halfRes):
+            northOff = self.border+25
         if(args.NWS):
-            self.offset = (self.border+10+5 , self.border+40)
+            self.westBorder += 1*pixPerDeg
+            self.offset = (northOff , self.border+40)
         else:
-            self.offset = (self.border+10+5 , self.border+135)
+            self.offset = (northOff , self.border+130)
         self.avgCSI = np.zeros((5,7))
         
     def evaluate(self, labels, predictions, _):
@@ -361,6 +365,7 @@ def parseArguments():
     parser.add_argument('--drawImages', action = 'store_true', help = 'draw results of each iteration')
     parser.add_argument('--elastic', action = 'store_true', help = 'use elastic fit loss')
     parser.add_argument('--CSI', action = 'store_true')
+    parser.add_argument('--preCalc', action = 'store_true')
     parser.add_argument('--deeplab', action = 'store_true')
     parser.add_argument('--maxDist', type = int, default = 250, help = 'maxDist for CSI in km')
     parser.add_argument('--globalCSI', action='store_true', default = False, help = 'calculate CSI by matching each front against the whole set of predictions. Else each front is only matched against another front. ')
@@ -401,7 +406,7 @@ def setupDataset(args):
         #mapTypes = {"NA": ("NA", (80,30.25), (-45,45), (-stepsize, stepsize), None)}
         #if(args.NWS):
         #    cropsize = (200, 360) 
-        #    mapTypes = {"hires": ("hires", (80, 30.25), (-140, -50), (-stepsize,stepsize), None) }
+        #    mapTypes = {"hires": ("hires", (80, 30.25), (-141, -55), (-stepsize,stepsize), None) }
         cropsize = (184,360)
         mapTypes = {"NA": ("NA", (76,30.25), (-50,40), (-stepsize, stepsize), None)}
         if(args.NWS):
@@ -409,11 +414,11 @@ def setupDataset(args):
             mapTypes = {"hires": ("hires", (76, 30.25), (-141, -55), (-stepsize,stepsize), None) }
     # Comparison against ETH only uses midlatitudes
     elif(args.halfRes and not args.fullsize):
-        cropsize = (34*4,360)
-        mapTypes = {"NA": ("NA", (64,30.25), (-50,40), (-stepsize, stepsize), None)}
+        cropsize = (36*4,360)
+        mapTypes = {"NA": ("NA", (66,30.25), (-50,40), (-stepsize, stepsize), None)}
         if(args.NWS):
-            cropsize = (34*4, 344) 
-            mapTypes = {"hires": ("hires", (64, 30.25), (-141, -55), (-stepsize,stepsize), None) }
+            cropsize = (36*4, 344) 
+            mapTypes = {"hires": ("hires", (66, 30.25), (-141, -55), (-stepsize,stepsize), None) }
 
     # ETH uses half Res before
     if(args.ETH):
@@ -448,8 +453,10 @@ def setupDataset(args):
     myEraExtractor = DerivativeFlippingAwareEraExtractor(variables, [], [], 0.0, 0 , 1, normType = normType, sharedObj = None)
     if(ETH):
         myEraExtractor = ETHEraExtractor()
+    if(args.preCalc):
+        myEraExtractor = BinaryResultExtractor()
     # Create Dataset
-    data_set = WeatherFrontDataset(data_dir=data_fold, label_dir=label_fold, mapTypes = mapTypes, levelRange = myLevelRange, transform=myTransform, outSize=cropsize, labelThickness= labelThickness, label_extractor = myLabelExtractor, era_extractor = myEraExtractor, asCoords = args.elastic, has_subfolds = (not (args.ETH),False), removePrefix = 1+(not args.ETH)*7)
+    data_set = WeatherFrontDataset(data_dir=data_fold, label_dir=label_fold, mapTypes = mapTypes, levelRange = myLevelRange, transform=myTransform, outSize=cropsize, labelThickness= labelThickness, label_extractor = myLabelExtractor, era_extractor = myEraExtractor, asCoords = args.elastic, has_subfolds = (not (args.ETH),False), removePrefix = 1+(not args.ETH)*7-(args.climatology and not args.ETH)*5)
     return data_set
 
 def setupDataLoader(data_set, args):
@@ -467,6 +474,9 @@ def inferResults(model, inputs, args):
     if(args.ETH):
         outputs = inputs.permute(0,2,3,1)
         smoutputs = inputs.permute(0,2,3,1)
+    if(args.preCalc):
+        outputs = inputs*1
+        smoutputs = inputs*1
     else:
         outputs = model(inputs)
         if(args.deeplab):
@@ -485,7 +495,11 @@ def inferResults(model, inputs, args):
                     isIn = True
             if(not isIn):
                 smoutputs[0,:,:,0] -= smoutputs[0,:,:,idx]
-        smoutputs = filterFronts(smoutputs.cpu().numpy(), args.border*4)
+        if(True or (args.climatology or args.drawImages)):
+            smoutputs = filterFronts(smoutputs.cpu().numpy(), args.border*4)
+        else:
+            # CSI may use an additional crop, due to input size restrictions! 
+            smoutputs = filterFrontsFreeBorder(smoutputs.cpu().numpy(), (args.border+1)*4, args.border*4, (args.border+1)*4, (args.border+0)*4)
     return outputs, smoutputs
 
 def performInference(model, loader, num_samples, evaluator, parOpt, args):
@@ -507,7 +521,10 @@ def performInference(model, loader, num_samples, evaluator, parOpt, args):
             if(not args.elastic):
                 labels = labels.to(device = parOpt.device, non_blocking=False)
             pixPerDeg = 2 if args.ETH else 4
-            labels = filterFronts(labels.cpu().numpy(), args.border*pixPerDeg)
+            if(True or (args.climatology or args.drawImages)):
+                labels = filterFronts(labels.cpu().numpy(), args.border*pixPerDeg)
+            else:
+                labels = filterFrontsFreeBorder(labels.cpu().numpy(), (args.border+1)*4, args.border*4, (args.border+1)*4, (args.border+0)*4)
             if(args.ETH):
                 evaluator.evaluate(torch.from_numpy(labels), smoutputs.cpu(), filename)
             else:

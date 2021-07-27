@@ -34,6 +34,19 @@ class ETHReader:
         #img = skeletonize(img>0)*img
         return img
 
+class BinaryResultReader:
+    def __init__(self):
+        pass
+    def read(self, filename, latrange, lonrange):
+        data = np.fromfile(filename, dtype=np.bool).reshape(720,1440,5)
+        mylonRange = (np.arange(lonrange[0], lonrange[1], 0.25)*4).astype(np.int32)
+        mylatRange = (np.arange(latrange[0], latrange[1], -0.25)*4).astype(np.int32)
+        mylonRange += 180*4
+        mylatRange -= 90*4
+        img = data[mylatRange]
+        img = img[:,mylonRange]
+        return img
+
 
 class CDFReader:
     def __init__(self, filetype = 0, normType = None, sharedObj = None):
