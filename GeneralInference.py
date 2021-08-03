@@ -28,7 +28,7 @@ from FrontPostProcessing import filterFronts, filterFrontsFreeBorder
 
 
 class CSIEvaluator():
-    def __init__(self, args):
+    def __init__(self, args, inlats, inlons, tgtlats, tgtlons, evlats, evlons):
         self.border = args.border
         self.halfRes = args.halfRes
         self.maxDist = args.maxDist
@@ -41,44 +41,50 @@ class CSIEvaluator():
         else:
             pixPerDeg = 4
             self.res = (-0.25, 0.25)
-        self.northBorder = (self.border+1)*pixPerDeg
-        self.southBorder = self.border*pixPerDeg
-        self.eastBorder = self.border*pixPerDeg
-        self.westBorder = self.border*pixPerDeg
-        northOff = self.border+15
-        if(self.halfRes):
-            northOff = self.border+25
-        if(args.NWS):
-            self.westBorder += 1*pixPerDeg
-            self.offset = (northOff , self.border+40)
-        else:
-            self.offset = (northOff , self.border+130)
+
+        self.northBorder = int((inlats[0]-tgtlats[0])*pixPerDeg)
+        self.southBorder = int((tgtlats[1]-inlats[1])*pixPerDeg)
+        self.eastBorder = int((inlons[1]-tgtlons[1])*pixPerDeg)
+        self.westBorder = int((tgtlons[0]-inlons[0])*pixPerDeg)
+        northOff = int(90-tgtlats[0])
+        westOff = int(tgtlons[0]+180)
+        self.offset = (northOff , westOff)
         self.avgCSI = np.zeros((5,7))
+        # The input is 5 degree larger than the evaluation area, to reduce any loss of mathches caused by cropping
+        self.evCrop = (int((tgtlats[0]-evlats[0])*pixPerDeg), int((evlons[0]-tgtlons[0])*pixPerDeg))
+            
+        print("in-data degree", inlats, inlons)
+        print("tgt-data degree", tgtlats, tgtlons)
+        print("ev-data degree", evlats, evlons)
+        print("borders pixel (NSWE)", self.northBorder, self.southBorder, self.westBorder, self.eastBorder)
+        print("offsets degree (NW)", self.offset)
+        print("evcrop pixel (NW) ", self.evCrop)
         
     def evaluate(self, labels, predictions, _):
         # downsample if necessary
         if(not self.ETH and self.halfRes):
             predictions = predictions.permute(0,3,1,2)
-            predictions = torch.nn.functional.max_pool2d(predictions, kernel_size = 2)
+            predictions = torch.nn.functional.max_pool2d(predictions, kernel_size=2, stride=2,padding = 0)
             predictions = predictions.permute(0,2,3,1)
-            labels = labels.permute(0,3,1,2)
-            labels = torch.nn.functional.max_pool2d(labels, kernel_size = 2)
-            labels = labels.permute(0,2,3,1)
+            
+            #labels = labels.permute(0,3,1,2)
+            #labels = torch.nn.functional.max_pool2d(labels, kernel_size = 2)
+            #labels = labels.permute(0,2,3,1)
         
         # extract the desired region
         predictions = predictions[:, self.northBorder:-self.southBorder,self.westBorder:-self.eastBorder].numpy()
         labels = labels[:, self.northBorder:-self.southBorder,self.westBorder:-self.eastBorder].numpy()
         # evaluate
         if(self.globalCSI):
-            self.avgCSI[0] += self.getCriticalSuccessAgainstWholeInKM(np.sum(labels, axis=-1), predictions[:,:,:,0], self.res, self.offset, self.maxDist)
+            self.avgCSI[0] += self.getCriticalSuccessAgainstWholeInKM(np.sum(labels, axis=-1), predictions[:,:,:,0], self.res, self.offset, self.maxDist, self.evCrop)
         else:
-            self.avgCSI[0] += self.getCriticalSuccessInKM(np.sum(labels, axis=-1), predictions[:,:,:,0],self.res, self.offset, self.maxDist)
+            self.avgCSI[0] += self.getCriticalSuccessInKM(np.sum(labels, axis=-1), predictions[:,:,:,0],self.res, self.offset, self.maxDist, self.evCrop)
         if(not self.ETH):
             for chnl in range(labels.shape[-1]):
                 if(self.globalCSI):    
-                    self.avgCSI[chnl+1] += self.getCriticalSuccessAgainstWholeInKM(labels[:,:,:,chnl], predictions[:,:,:,chnl+1], self.res, self.offset, self.maxDist)
+                    self.avgCSI[chnl+1] += self.getCriticalSuccessAgainstWholeInKM(labels[:,:,:,chnl], predictions[:,:,:,chnl+1], self.res, self.offset, self.maxDist, self.evCrop)
                 else:
-                    self.avgCSI[chnl+1] += self.getCriticalSuccessInKM(labels[:,:,:,chnl], predictions[:,:,:,chnl+1],self.res, self.offset, self.maxDist)
+                    self.avgCSI[chnl+1] += self.getCriticalSuccessInKM(labels[:,:,:,chnl], predictions[:,:,:,chnl+1],self.res, self.offset, self.maxDist, self.evCrop)
 
     def finish(self):
         globalPOD = self.avgCSI[:,3]/self.avgCSI[:,4]
@@ -112,43 +118,81 @@ class CSIEvaluator():
     
     def getCriticalSuccessInKM(self, image, prediction, res = (-0.25, 0.25), offset = (0,0), maxDist = 100):
         offarray = np.array([offset[0]/np.abs(res[0]), offset[1]/res[1]])
+        evarray = np.array([evCrop[0], evCrop[1]])
 
         # label all distinct components in both images
-        mypred = morphology.binary_dilation(prediction[0,:,:]>0, selem = np.ones((3,3)))
         mythinpred = prediction[0,:,:]>0
-        predLabel = measure.label(mypred, background = 0)*mythinpred
-
-        myimg = morphology.binary_dilation(image[0,:,:]>0, selem = np.ones((3,3)))
         mythinimg = image[0,:,:]>0
-        imageLabel = measure.label(myimg, background = 0)*mythinimg
         
-        numPredLabels = np.max(predLabel)
-        numImageLabels = np.max(imageLabel)
+        #mypred = morphology.binary_dilation(prediction[0,evCrop[0]:-evCrop[0],evCrop[1]:-evCrop[1]]>0, selem = np.ones((3,3)))
+        #predLabel = measure.label(mypred, background = 0)*mythinpred[evCrop[0]:-evCrop[0], evCrop[1]:-evCrop[1]]
+        
+        mypredComp = morphology.binary_dilation(prediction[0,:,:]>0, selem = np.ones((3,3)))
+        predLabelComp = measure.label(mypred, background = 0)*mythinpred
+        mypred = mypredComp[evCrop[0]:-evCrop[0], evCrop[1]:-evCrop[1]]
+        predLabel = predLabelComp[evCrop[0]:-evCrop[0], evCrop[1]:-evCrop[1]]
+
+        #myimg = morphology.binary_dilation(image[0,evCrop[0]:-evCrop[0], evCrop[1]:-evCrop[1]]>0, selem = np.ones((3,3)))
+        #imageLabel = measure.label(myimg, background = 0)*mythinimg[evCrop[0]:-evCrop[0], evCrop[1]:-evCrop[1]]
+        
+        myimgComp = morphology.binary_dilation(image[0,:,:]>0, selem = np.ones((3,3)))
+        imageLabelComp = measure.label(myimg, background = 0)*mythinimg
+        myimg = myimgComp[evCrop[0]:-evCrop[0], evCrop[1]:-evCrop[1]]
+        imageLabel = imageLabelComp[evCrop[0]:-evCrop[0], evCrop[1]:-evCrop[1]]
+        
+        #numPredLabels = np.max(predLabel)
+        #numImageLabels = np.max(imageLabel)
+        numPredLabels = len(np.unique(predLabel))-1
+        numImageLabels = len(np.unique(imageLabel))-1
 
         numValidPredLabels = numPredLabels
         numValidImageLabels = numImageLabels
+        numValidPredLabelsComp = np.max(predLabelComp)
+        numValidImageLabelsComp = np.max(imageLabelComp)
 
         SR = 1000*np.ones((numValidPredLabels, numValidImageLabels))
         POD = 1000*np.ones((numValidImageLabels, numValidPredLabels))
 
-        for pidx in range(1,numValidPredLabels+1):
+        print("This does not work for evCRop > 0 ")
+        # evaluate all detected label in evaluation range against all WS-label in search range
+        for pidx in range(1,numValidPredLabelsComp+1):
             onlyPredLabel = (predLabel == pidx)*(2*maxDist)
+            #evaluation points
             labelPoints = np.nonzero(onlyPredLabel)
-            labelPointsArr = np.array(labelPoints).transpose()+offarray
-            for iidx in range(1,numValidImageLabels+1):
-                onlyImageLabel = (imageLabel == iidx)*(2*maxDist)
-                imagePoints = np.nonzero(onlyImageLabel)
-                imagePointsArr = np.array(imagePoints).transpose()+offarray
-                if(len(imagePointsArr)>0):
+            # the label does not exist in the evaluation region => the front is completely outside  => do not evaluate it
+            if(len(labelPoints[0]) == 0):
+                continue
+            # the label is (partially) within the evaluation region => evaluate it
+            else:
+                tidx+=1
+
+            labelPointsArr = np.array(labelPoints).transpose()+offarray+evarray
+            for iidx in range(1,numValidImageLabelsComp+1):
+                onlyImageLabel = (imageLabelComp == iidx)*(2*maxDist)
+                # comparison points
+                imagePointsComp = np.nonzero(onlyImageLabel)
+                imagePointsArrComp = np.array(imagePoints).transpose()+offarray
+                if(len(imagePointsArrComp)>0):
                     # for each predicted point get the minimum distance in km to the label
                     for p in range(len(labelPoints[0])):
-                        onlyPredLabel[labelPoints[0][p],labelPoints[1][p]] = self.getDistanceOnEarth(labelPointsArr[p:p+1], imagePointsArr, res)
+                        onlyPredLabel[labelPoints[0][p],labelPoints[1][p]] = self.getDistanceOnEarth(labelPointsArr[p:p+1], imagePointsArrComp, res)
                 medianDistance = np.median((onlyPredLabel)[labelPoints])
                 SR[pidx-1, iidx-1] = min(SR[pidx-1, iidx-1], medianDistance)
-                if(len(labelPointsArr)>0):
+        # evaluate all WS label in evaluation range against all detected label in search range
+        for pidx in range(1,numValidPredLabelsComp+1):
+            onlyPredLabel = (predLabelComp == pidx)*(2*maxDist)
+            #comparison points
+            labelPointsComp = np.nonzero(onlyPredLabel)
+            labelPointsArrComp = np.array(labelPoints).transpose()+offarray
+            for iidx in range(1,numValidImageLabelsComp+1):
+                onlyImageLabel = (imageLabel == iidx)*(2*maxDist)
+                # comparison points
+                imagePoints = np.nonzero(onlyImageLabel)
+                imagePointsArr = np.array(imagePoints).transpose()+offarray+evarray
+                if(len(labelPointsArrComp)>0):
                     # for each predicted point get the minimum distance in km to the label
                     for p in range(len(imagePoints[0])):
-                        onlyImageLabel[imagePoints[0][p],imagePoints[1][p]] = self.getDistanceOnEarth(imagePointsArr[p:p+1], labelPointsArr, res)
+                        onlyImageLabel[imagePoints[0][p],imagePoints[1][p]] = self.getDistanceOnEarth(imagePointsArr[p:p+1], labelPointsArrComp, res)
 
                 medianDistance = np.median((onlyImageLabel)[imagePoints])
                 POD[iidx-1, pidx-1] = min(POD[iidx-1, pidx-1], medianDistance)
@@ -168,48 +212,92 @@ class CSIEvaluator():
             myCSI = 1/(1/myPOD + 1/mySR -1)
         return np.array([myCSI, myPOD, mySR, np.sum((bestPOD<=maxDist)*1), numImageLabels, np.sum((bestSR<=maxDist)*1), numPredLabels])
 
-    def getCriticalSuccessAgainstWholeInKM(self, image, prediction, res = (-0.25, 0.25), offset = (0,0), maxDist=100):
+    def getCriticalSuccessAgainstWholeInKM(self, image, prediction, res = (-0.25, 0.25), offset = (0,0), maxDist=100, evCrop = (0,0)):
         offarray = np.array([offset[0]/np.abs(res[0]), offset[1]/res[1]])
+        evarray = np.array([evCrop[0], evCrop[1]])
         # label all distinct components in both images
-        mypred = morphology.binary_dilation(prediction[0,:,:]>0, selem = np.ones((3,3)))
         mythinpred = prediction[0,:,:]>0
-        predLabel = measure.label(mypred, background = 0)*mythinpred
+        if(evCrop[0] != 0 and evCrop[1] != 0):
+            #mypred = morphology.binary_dilation(prediction[0,evCrop[0]:-evCrop[0], evCrop[1]:-evCrop[1]]>0, selem = np.ones((3,3)))
+            #predLabel = measure.label(mypred, background = 0)*mythinpred[evCrop[0]:-evCrop[0], evCrop[1]:-evCrop[1]]
+            mypredComp = morphology.binary_dilation(prediction[0,:,:]>0, selem = np.ones((3,3)))
+            predLabelComp = measure.label(mypredComp, background = 0)*mythinpred
+            predLabel = predLabelComp[evCrop[0]:-evCrop[0], evCrop[1]:-evCrop[1]]
+            mypred = mypredComp[evCrop[0]:-evCrop[0], evCrop[1]:-evCrop[1]]
+        else:
+            mypredComp = morphology.binary_dilation(prediction[0,:,:]>0, selem = np.ones((3,3)))
+            predLabelComp = measure.label(mypredComp, background = 0)*mythinpred
+            mypred = morphology.binary_dilation(prediction[0,:,:]>0, selem = np.ones((3,3)))
+            predLabel = measure.label(mypred, background = 0)*mythinpred
+            #predLabel = predLabelComp
 
-        myimg = morphology.binary_dilation(image[0,:,:]>0, selem = np.ones((3,3)))
         mythinimg = image[0,:,:]>0
-        imageLabel = measure.label(myimg, background = 0)*mythinimg
+        if(evCrop[0] != 0 and evCrop[1] != 0):
+            #myimg = morphology.binary_dilation(image[0,evCrop[0]:-evCrop[0], evCrop[1]:-evCrop[1]]>0,selem = np.ones((3,3)))
+            #imageLabel = measure.label(myimg,background=0)*mythinimg[evCrop[0]:-evCrop[0], evCrop[1]:-evCrop[1]]
+            myimgComp = morphology.binary_dilation(image[0,:,:]>0, selem = np.ones((3,3)))
+            imageLabelComp = measure.label(myimgComp, background = 0)*mythinimg
+            myimg = myimgComp[evCrop[0]:-evCrop[0], evCrop[1]:-evCrop[1]]
+            imageLabel = imageLabelComp[evCrop[0]:-evCrop[0], evCrop[1]:-evCrop[1]]
+        else:
+            myimg = morphology.binary_dilation(image[0,:,:]>0, selem = np.ones((3,3)))
+            imageLabel = measure.label(myimgComp, background = 0)*mythinimg
+            myimgComp = morphology.binary_dilation(image[0,:,:]>0, selem = np.ones((3,3)))
+            imageLabelComp = measure.label(myimg, background = 0)*mythinimg
 
-        numPredLabels = np.max(predLabel)
-        numImageLabels = np.max(imageLabel)
-
+        #numPredLabels = np.max(predLabel)#[evCrop[0]:-evCrop[0], evCrop[1]:-evCrop[1]])
+        #numImageLabels = np.max(imageLabel)#[evCrop[0]:-evCrop[0], evCrop[1]:-evCrop[1]])
+        # count number of unique entries in the evaluation area (== number of individual fronts from the search area that are at least partially within the evaluation area)
+        numPredLabels = len(np.unique(predLabel))-1
+        numImageLabels = len(np.unique(imageLabel))-1
+        # number of labels in the evaluation region
         numValidPredLabels = numPredLabels
         numValidImageLabels = numImageLabels
+        # number of labels in the search region
+        numValidPredLabelsComp = np.max(predLabelComp)
+        numValidImageLabelsComp = np.max(imageLabelComp)
         
         SR = (2*maxDist)*np.ones((numValidPredLabels))
         POD = (2*maxDist)*np.ones((numValidImageLabels))
-        imagePoints = np.nonzero(image[0])
+        imagePoints = np.nonzero(mythinimg)
         imagePointsArr = np.array(imagePoints).transpose()+offarray
-        for pidx in range(1,numValidPredLabels+1):
+        #print(imageLabel.shape, predLabel.shape, numPredLabels, numImageLabels)
+        tidx = 0
+        for pidx in range(1,numValidPredLabelsComp+1):
             onlyPredLabel = (predLabel == pidx)*(2*maxDist)
             points = np.nonzero(onlyPredLabel)
-            pointsArr = np.array(points).transpose()+offarray
+            # the label does not exist in the evaluation region => the front is completely outside  => do not evaluate it
+            if(len(points[0]) == 0):
+                continue
+            # the label is (partially) within the evaluation region => evaluate it
+            else:
+                tidx+=1
+            #print("p:",len(points[0]))
+            pointsArr = np.array(points).transpose()+offarray+evarray
             if(len(imagePointsArr)>0):
                 for p in range(len(points[0])):
                     onlyPredLabel[points[0][p],points[1][p]] = self.getDistanceOnEarth(pointsArr[p:p+1], imagePointsArr, res)
             medianDistance = np.median((onlyPredLabel)[points])
-            SR[pidx-1] = medianDistance
+            SR[tidx-1] = medianDistance
         
         labelPoints = np.nonzero(mythinpred)
         labelPointsArr = np.array(labelPoints).transpose()+offarray
-        for iidx in range(1,numValidImageLabels+1):
+        tidx = 0
+        for iidx in range(1,numValidImageLabelsComp+1):
             onlyImageLabel = (imageLabel == iidx)*(2*maxDist)
-            points = np.nonzero(onlyImageLabel)
-            pointsArr = np.array(points).transpose()+offarray
+            points = np.nonzero(onlyImageLabel)#[evCrop[0]:-evCrop[0],evCrop[1]:-evCrop[1]])
+            if(len(points[0]) == 0):
+                continue
+            # the label is (partially) within the evaluation region => evaluate it
+            else:
+                tidx+=1
+            pointsArr = np.array(points).transpose()+offarray+evarray
+            #print("l:",len(points[0]))
             if(len(labelPointsArr)>0):
                 for p in range(len(points[0])):
                     onlyImageLabel[points[0][p],points[1][p]] = self.getDistanceOnEarth(pointsArr[p:p+1], labelPointsArr, res)
             medianDistance = np.median((onlyImageLabel)[points])
-            POD[iidx-1] = medianDistance
+            POD[tidx-1] = medianDistance
 
         if(numPredLabels == 0 and numImageLabels == 0):
             return np.array([1,0,0, 0, 0, 0 ,0])
@@ -407,18 +495,18 @@ def setupDataset(args):
         #if(args.NWS):
         #    cropsize = (200, 360) 
         #    mapTypes = {"hires": ("hires", (80, 30.25), (-141, -55), (-stepsize,stepsize), None) }
-        cropsize = (184,360)
-        mapTypes = {"NA": ("NA", (76,30.25), (-50,40), (-stepsize, stepsize), None)}
+        cropsize = (66*4,110*4)
+        mapTypes = {"NA": ("NA", (76+10,30.25-10), (-50-10,40+10), (-stepsize, stepsize), None)}
         if(args.NWS):
-            cropsize = (184, 344) 
-            mapTypes = {"hires": ("hires", (76, 30.25), (-141, -55), (-stepsize,stepsize), None) }
+            cropsize = (66*4, 106*4) 
+            mapTypes = {"hires": ("hires", (76+10, 30.25-10), (-141-10, -55+10), (-stepsize,stepsize), None) }
     # Comparison against ETH only uses midlatitudes
     elif(args.halfRes and not args.fullsize):
-        cropsize = (36*4,360)
-        mapTypes = {"NA": ("NA", (66,30.25), (-50,40), (-stepsize, stepsize), None)}
+        cropsize = (56*4,110*4)
+        mapTypes = {"NA": ("NA", (76,20.25), (-60,50), (-stepsize, stepsize), None)}
         if(args.NWS):
-            cropsize = (36*4, 344) 
-            mapTypes = {"hires": ("hires", (66, 30.25), (-141, -55), (-stepsize,stepsize), None) }
+            cropsize = (56*4, 106*4) 
+            mapTypes = {"hires": ("hires", (76, 20.25), (-151, -45), (-stepsize,stepsize), None) }
 
     # ETH uses half Res before
     if(args.ETH):
@@ -456,7 +544,7 @@ def setupDataset(args):
     if(args.preCalc):
         myEraExtractor = BinaryResultExtractor()
     # Create Dataset
-    data_set = WeatherFrontDataset(data_dir=data_fold, label_dir=label_fold, mapTypes = mapTypes, levelRange = myLevelRange, transform=myTransform, outSize=cropsize, labelThickness= labelThickness, label_extractor = myLabelExtractor, era_extractor = myEraExtractor, asCoords = args.elastic, has_subfolds = (not (args.ETH),False), removePrefix = 1+(not args.ETH)*7-(args.climatology and not args.ETH)*5)
+    data_set = WeatherFrontDataset(data_dir=data_fold, label_dir=label_fold, mapTypes = mapTypes, levelRange = myLevelRange, transform=myTransform, outSize=cropsize, labelThickness= labelThickness, label_extractor = myLabelExtractor, era_extractor = myEraExtractor, asCoords = args.elastic, has_subfolds = (not (args.ETH or args.preCalc),False), removePrefix = 1+(not args.ETH)*2-3*(args.preCalc), halfResEval = args.halfRes and (not args.ETH))
     return data_set
 
 def setupDataLoader(data_set, args):
@@ -474,9 +562,18 @@ def inferResults(model, inputs, args):
     if(args.ETH):
         outputs = inputs.permute(0,2,3,1)
         smoutputs = inputs.permute(0,2,3,1)
-    if(args.preCalc):
+    elif(args.preCalc):
         outputs = inputs*1
         smoutputs = inputs*1
+        labelsToUse = args.labelGroupingList.split(",")
+        possLabels = ["w","c","o","s"]
+        for idx, possLab in enumerate(possLabels, 1):
+            isIn = False
+            for labelGroup in labelsToUse:
+                if(possLab in labelGroup):
+                    isIn = True
+            if(not isIn):
+                smoutputs[0,:,:,0] -= smoutputs[0,:,:,idx]
     else:
         outputs = model(inputs)
         if(args.deeplab):
@@ -520,12 +617,14 @@ def performInference(model, loader, num_samples, evaluator, parOpt, args):
         else:
             if(not args.elastic):
                 labels = labels.to(device = parOpt.device, non_blocking=False)
-            pixPerDeg = 2 if args.ETH else 4
+            pixPerDeg = 2 if args.halfRes else 4
             if(True or (args.climatology or args.drawImages)):
                 labels = filterFronts(labels.cpu().numpy(), args.border*pixPerDeg)
             else:
                 labels = filterFrontsFreeBorder(labels.cpu().numpy(), (args.border+1)*4, args.border*4, (args.border+1)*4, (args.border+0)*4)
             if(args.ETH):
+                evaluator.evaluate(torch.from_numpy(labels), smoutputs.cpu(), filename)
+            elif(args.preCalc):
                 evaluator.evaluate(torch.from_numpy(labels), smoutputs.cpu(), filename)
             else:
                 evaluator.evaluate(torch.from_numpy(labels), torch.from_numpy(smoutputs), filename)
@@ -533,7 +632,7 @@ def performInference(model, loader, num_samples, evaluator, parOpt, args):
 
 def setupModel(args, parOpt):
     model = None
-    if(not args.ETH):
+    if(not (args.ETH or args.preCalc)):
         embeddingFactor = 6
         SubBlocks = (3,3,3)
         kernel_size = 5
@@ -595,8 +694,19 @@ if __name__ == "__main__":
         print("")
     model = setupModel(args, parOpt)
     
+    evMapType = "hires" if args.NWS else "NA"
+    info = data_set.mapTypes[evMapType]
+    inlats = np.array(info[1])
+    inlons = np.array(info[2])
+    tgtlats = np.array((inlats[0]-6 , inlats[1]+5))
+    tgtlons = np.array((inlons[0]+5+1*(args.NWS) , inlons[1]-5))
+    evdiff = 10
+    evlats = np.array((tgtlats[0]-evdiff , tgtlats[1]+evdiff))
+    evlons = np.array((tgtlons[0]+evdiff , tgtlons[1]-evdiff))
+
+
     # Basic: CSI Evaluation
-    evaluator = CSIEvaluator(args)
+    evaluator = CSIEvaluator(args, inlats, inlons, tgtlats, tgtlons, evlats, evlons)
     # Alternative: Create A climatology of a year
     if(args.climatology):
         evaluator = ClimatologyEvaluator(args)

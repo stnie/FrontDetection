@@ -32,7 +32,7 @@ from skimage.io import imsave
 from FrontPostProcessing import filterFronts
 import netCDF4
 from statsmodels.regression.quantile_regression import QuantReg
-
+import statsmodels.api as sm
 
 class DistributedOptions():
     def __init__(self):
@@ -64,6 +64,7 @@ def parseArguments():
     parser.add_argument('--fromFile', type = str, default = None, help = 'show the inividual error values during inference')
     parser.add_argument('--calcType', type = str, default = "ML", help = 'from which fronts should the crossing be calculated')
     parser.add_argument('--calcVar', type = str, default = "t", help = 'which variable to measure along the cross section')
+    parser.add_argument("--tgtseason", type = str, default = "", help = "which season to evaluate for (djf, mam, jja, son), default no season")
     args = parser.parse_args()
     args.binary = args.classes == 1
     
@@ -146,6 +147,7 @@ def performInference(loader, num_samples, parOpt, args):
         front_file = "/lustre/project/m2_jgu-binaryhpc/Front_Detection_Data/PercentileData/tmp2016_frontprop.nc"
         tgtvar = "tp"
         mask_file = "/lustre/project/m2_jgu-binaryhpc/Front_Detection_Data/PercentileData/tmp2016_eventMask.nc"
+        height_file = "/lustre/project/m2_jgu-w2w/ipaserver/ERA5/era5_const.nc"
     elif args.calcVar == "10mwind":
         pct_file = ""
         tgtvar = "u"
@@ -154,31 +156,40 @@ def performInference(loader, num_samples, parOpt, args):
         tgtvar = "v"
     skip = 0
     total_fronts = np.zeros((num_samples, 680, 1400, 5), dtype=np.bool)
-    all_fronts = np.zeros((720, 1440, 5))
-    for idx, data in enumerate(tqdm(loader, desc ='eval'), 0):
-        if idx<skip:
-            continue
-        if(idx == num_samples+skip):
-            break
-        inputs, labels, filename = data.data.cpu().numpy(), data.labels, data.filenames
-        
-        year,month,day,hour = filename[0][no:no+4],filename[0][no+4:no+6],filename[0][no+6:no+8],filename[0][no+9:no+11]
-        if(hour in ["06","12","18","00"]):
-            all_fronts += inputs[0]
-        inputs = inputs[:,border:-border,border:-border,:]
+    all_fronts = np.zeros((360, 720, 5))
+    if(False):
+        for idx, data in enumerate(tqdm(loader, desc ='eval'), 0):
+            if idx<skip:
+                continue
+            if(idx == num_samples+skip):
+                exit(1)
+                break
+            inputs, labels, filename = data.data.cpu().numpy(), data.labels, data.filenames
+            
+            year,month,day,hour = filename[0][no:no+4],filename[0][no+4:no+6],filename[0][no+6:no+8],filename[0][no+9:no+11]
+            #if(hour in ["06","12","18","00"]):
+            #    all_fronts += inputs[0]
+            inputs = inputs[:,border:-border,border:-border,:]
 
-        monthid = int(month)-1
-        front = inputs[0]
-        for ftype in range(5):
-            # reate wide data
-            for _ in range(Boxsize):
-                front[:,:,ftype] = morphology.binary_dilation(front[:,:,ftype])
-            # sum the result to get the total front map
-            #total_fronts[monthid, ftype]  += front[:,:,ftype]
-        total_fronts[idx,:,:,:] = front[:,:,:].astype(np.bool)
-    fpop = np.sum(total_fronts, axis=0)/num_samples
-    all_fronts.tofile("compareAgainstClimatology.bin")
-    total_fronts.tofile("/lustre/project/m2_jgu-binaryhpc/Front_Detection_Data/PercentileData/tmp2016_front4d.bin")
+            monthid = int(month)-1
+            front = inputs[0]
+            for ftype in range(5):
+                front[:,:,ftype] = distance_transform_edt(1-front[:,:,ftype])<=10
+                # reate wide data
+                #for _ in range(Boxsize):
+                #    front[:,:,ftype] = morphology.binary_dilation(front[:,:,ftype])
+                # sum the result to get the total front map
+                #total_fronts[monthid, ftype]  += front[:,:,ftype]
+            total_fronts[idx,:,:,:] = front[:,:,:].astype(np.bool)
+        #all_fronts.tofile("compareAgainstClimatology.bin")
+        total_fronts.tofile("/lustre/project/m2_jgu-binaryhpc/Front_Detection_Data/PercentileData/tmp2016_front4d_l2.bin")
+    else:
+        pass
+        total_fronts = np.fromfile("/lustre/project/m2_jgu-binaryhpc/Front_Detection_Data/PercentileData/tmp2016_front4d_l2.bin", dtype=np.bool).reshape(num_samples,680,1400,5)
+        #for x in range(num_samples):
+        #    total_fronts[x,:,:,0] = np.sum(total_fronts[x,:,:,1:4],axis=-1).astype(np.bool)
+        #total_fronts = np.flip(total_fronts, axis = 0)
+
     # Read the percentile mask
     #rootgrp = netCDF4.Dataset(os.path.realpath(front_file), "r", format="NETCDF4", parallel=False)
     #tgt_latrange, tgt_lonrage = data_set.getCropRange(data_set.mapTypes[mapType][1], data_set.mapTypes[mapType][2], data_set.mapTypes[mapType][3], 0)
@@ -199,11 +210,47 @@ def performInference(loader, num_samples, parOpt, args):
     # => we need to offset lonrange
     exEvs = np.zeros((num_samples, abs(int(tgt_latrange[0])-int(tgt_latrange[1]))*4, abs(int(tgt_lonrage[1])-int(tgt_lonrage[0]))*4), dtype =np.bool)
     if(tgt_lonrage[0] < 0 and tgt_lonrage[1] >= 0):
+        pass
         exEvs[:,:,:-int(tgt_lonrage[0])*4] =  (rootgrp["tp"][:num_samples,int(90-tgt_latrange[0])*4:int(90-tgt_latrange[1])*4, int(tgt_lonrage[0])*4:]).astype(np.bool)
         exEvs[:,:,-int(tgt_lonrage[0])*4:] = (rootgrp["tp"][:num_samples,int(90-tgt_latrange[0])*4:int(90-tgt_latrange[1])*4, :int(tgt_lonrage[1])*4]).astype(np.bool)
     else:
+        pass
         exEvs = rootgrp[tgtvar][:,int(90-tgt_latrange[0])*4:int(90-tgt_latrange[1])*4, int(tgt_lonrage[0])*4:int(tgt_lonrage[1])*4]
     rootgrp.close()
+
+
+
+    # read the height map and remove all height +5 pixel radius (dilation)
+    rootgrp = netCDF4.Dataset(os.path.realpath(height_file), "r", format="NETCDF4", parallel=False)
+    tgt_latrange, tgt_lonrage = data_set.getCropRange(data_set.mapTypes[mapType][1], data_set.mapTypes[mapType][2], data_set.mapTypes[mapType][3], 0)
+    # the files have lat 90 - -90,   lon 0 - 360
+    # => we need to offset lonrange
+    heightmap = np.zeros((abs(int(tgt_latrange[0])-int(tgt_latrange[1]))*4, abs(int(tgt_lonrage[1])-int(tgt_lonrage[0]))*4))
+    if(tgt_lonrage[0] < 0 and tgt_lonrage[1] >= 0):
+        heightmap[:,:-int(tgt_lonrage[0])*4] =  (rootgrp["z"][0,int(90-tgt_latrange[0])*4:int(90-tgt_latrange[1])*4, int(tgt_lonrage[0])*4:])
+        heightmap[:,-int(tgt_lonrage[0])*4:] = (rootgrp["z"][0,int(90-tgt_latrange[0])*4:int(90-tgt_latrange[1])*4, :int(tgt_lonrage[1])*4])
+    else:
+        heightmap = rootgrp["z"][0,int(90-tgt_latrange[0])*4:int(90-tgt_latrange[1])*4, int(tgt_lonrage[0])*4:int(tgt_lonrage[1])*4]
+    rootgrp.close()
+
+    #get a filter map for height lower than 3000
+    heightmap.tofile("before.bin")
+    print(np.max(heightmap))
+    # transform geopotential to height in m
+    heightmap /= 9.80665
+    heightmap.tofile("after.bin")
+    print(np.max(heightmap))
+    # get all points above 3000m
+    heightmap = heightmap[border:-border,border:-border] >= 3000
+
+    # dilate map by 5
+    numHeightDilation = 5
+    for _ in range(numHeightDilation):
+        heightmap = morphology.binary_dilation(heightmap)
+
+    #invert the map to get all points which are not considered a mountain
+    heightmap = 1-heightmap
+    heightmap.tofile("heightFilterMap.bin")
 
     #create the 
     #fpop = fpop[border:-border,border:-border] 
@@ -226,41 +273,80 @@ def performInference(loader, num_samples, parOpt, args):
         mySamplePoints[p,:,0] = allPos[0][rand_points]
         mySamplePoints[p,:,1] = allPos[1][rand_points]
     '''
+
+
+    dpm = [31,29,31,30,31,30,31,31,30,31,30,31]
+    ssf = np.cumsum(np.array([0]+dpm))*24
+    seasons = ["djf", "mam", "jja", "son"]
+    tgt_season = args.tgtseason
+    
+    # when evaluating seasons, we should expect less extreme events per season
+    casePerPoint = 13
+    if(tgt_season == "djf"):
+        evcount = np.sum(exEvs[ssf[11]:ssf[12]], axis=0)+np.sum(exEvs[:ssf[2]], axis= 0)
+        fpop = (np.sum(total_fronts[ssf[11]:ssf[12]], axis=0)+ np.sum(total_fronts[:ssf[2]], axis=0))/((31+31+29)*24)
+    elif(tgt_season == "mam"):
+        evcount = np.sum(exEvs[ssf[2]:ssf[5]], axis = 0)
+        fpop = np.sum(total_fronts[ssf[2]:ssf[5]], axis=0)/((31+30+31)*24)
+    elif(tgt_season == "jja"):
+        evcount = np.sum(exEvs[ssf[5]:ssf[8]], axis = 0)
+        fpop = np.sum(total_fronts[ssf[5]:ssf[8]], axis=0)/((30+31+31)*24)
+    elif(tgt_season == "son"):
+        evcount = np.sum(exEvs[ssf[8]:ssf[11]], axis = 0)
+        fpop = np.sum(total_fronts[ssf[8]:ssf[11]], axis=0)/((30+31+30)*24)
+    else:
+        evcount = np.sum(exEvs, axis=0)
+        fpop = np.sum(total_fronts, axis=0)/num_samples
+        casePerPoint = 50
     # generate the event lists
     # get the total count of extreme events
-    evcount = np.sum(exEvs, axis = 0)
-
+    # get the ratio of front events 
+    
     k = 0
     stepsize = 1
-    casePerPoint = 50
+    fpop = np.concatenate((fpop[100:260],fpop[420:580]),axis=0)
+    heightmap = np.concatenate((heightmap[100:260], heightmap[420:580]), axis=0)
+    validHeights = np.nonzero(heightmap)
+    num_bpoints = 20
     for k in range(5):
         print(np.max(fpop[:,:,k]*100))
-        maxPct = np.round(np.max(fpop[:,:,k]*100)).astype(int)
+        maxPct = np.round(np.max(fpop[:,:,k][validHeights]*100)).astype(int)
         print(maxPct, flush = True)
+        num_bpoints = max(10,(600//maxPct)+1)
+        print(num_bpoints)
         maxPct+=1
-        mySampleArray = np.zeros((maxPct, 10, 1000,5))
+        mySampleArray = np.zeros((maxPct, num_bpoints, 1000,5))
+        myProbArray = np.zeros((maxPct,num_bpoints,1000))
         for p in range(0,maxPct,stepsize):
             print(p,end=": ")
             low_p = (p-stepsize) / 100
             up_p = p/100
+            # get all values in the midlats that are within the percentile range
             if(p == 0):
-                allPos = np.nonzero(fpop[:,:,k]<=up_p)
+                allPoss = np.nonzero(fpop[:,:,k]<=up_p)
             else:
-                allPos = np.nonzero((fpop[:,:,k]<=up_p) * (fpop[:,:,k]>(low_p)))
-            if(len(allPos[0])<10):
+                allPoss = np.nonzero((fpop[:,:,k]<=up_p) * (fpop[:,:,k]>(low_p)))
+            # filter, to obtain only points that are also lower than the height threshold
+            validPoss = np.nonzero(heightmap[allPoss])
+            # build a tuple for indexing containing all points within the current percentile and simultaneously being lower than the height threshold
+            allPos = (allPoss[0][validPoss], allPoss[1][validPoss])
+
+            if(len(allPos[0])<num_bpoints):
                 print("invalid p:", p, flush = True)
                 mySampleArray[p,:,:,:] = np.NaN
                 continue
-            rand_points = rng.choice(len(allPos[0]), size=10, replace = False)
+            rand_points = rng.choice(len(allPos[0]), size=num_bpoints, replace = False)
             xsmpls = allPos[0][rand_points]
             ysmpls = allPos[1][rand_points]
-            for point in range(10):
+            for point in range(num_bpoints):
                 print(point, end=", ")
                 xsmp = xsmpls[point]
                 ysmp = ysmpls[point]
-                north = xsmp < 340
-                fr = 0 if north else 340
-                to = 340 if north else 680
+                myProbArray[p,point,:] = fpop[xsmp,ysmp,k]
+                north = xsmp < 160
+                fr = 420 if north else 100
+                to = 580 if north else 260
+                xoff = 100 if north else 260
                 hemPos = np.nonzero(evcount[fr:to]>= casePerPoint)
                 for li in range(1000):
                     # draw random points from opposite hemisphere
@@ -273,7 +359,7 @@ def performInference(loader, num_samples, parOpt, args):
                         t_size = evcount[xpos, ypos]
                         t_begin = rng.integers(low = 0, high=1+t_size-casePerPoint, size = 1)
                         t_list = np.nonzero(exEvs[:,xpos, ypos])[0][t_begin[0]:t_begin[0]+casePerPoint]
-                        mySampleArray[p, point, li] += np.sum(total_fronts[t_list, xsmp,ysmp].astype(np.int16), axis = 0) 
+                        mySampleArray[p, point, li] += np.sum(total_fronts[t_list, xsmp+xoff,ysmp].astype(np.int16), axis = 0) 
                     mySampleArray[p, point, li] /= casePerPoint*6
                     #print(mySampleArray[p, point, li])
             print(flush=True)
@@ -293,13 +379,15 @@ def performInference(loader, num_samples, parOpt, args):
                     mySampleArray[p,pt,li] /= 50*6
         '''
         
-        with open("myRandSampResults_{}.txt".format(k), "w") as f:
+        with open(args.outname+"/myRandSampResults_{}_{}.txt".format(tgt_season, k), "w") as f:
             for p in range(0,maxPct,stepsize):
                 print(p, file = f)
+                print(myProbArray[p,:,0], file = f)
                 print(np.median(mySampleArray[p], axis=1), file = f)
                 print(np.percentile(mySampleArray[p],1, axis=1), file = f)
                 print(np.percentile(mySampleArray[p],99, axis=1), file = f)
-            ps = np.array([[x]*10*1000 for x in range(0,maxPct,stepsize)]).reshape(-1)
+            ps = myProbArray.reshape(-1)#np.array([[max(0,x-0.5)]*10*1000 for x in range(0,maxPct,stepsize)]).reshape(-1)
+            ps = sm.add_constant(ps)
             for x in range(5):
                 print("for x = ",x)
                 exop = mySampleArray[::stepsize,:,:,x].reshape(-1)

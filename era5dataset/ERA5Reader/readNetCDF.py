@@ -24,10 +24,10 @@ class ETHReader:
         # Get The offsets for cropping
         mylonRange = (np.arange(lonrange[0], lonrange[1], 0.5)*2).astype(np.int32)
         mylatRange = (np.arange(latrange[0], latrange[1], -0.5)*2).astype(np.int32)
-        # Adjust the range to the data format of ETH  (lat 90 -> -90, lon -180 -> 180 (after np roll))
+        # Adjust the range to the data format of ETH  (lat -89.5 -> 90, lon -180 -> 180 (after np roll))
         
         mylonRange += 180*2
-        mylatRange -= 90*2
+        mylatRange -= 90*2+1
         img = img[:, mylatRange, :]
         img = img[:,:,mylonRange]
         rootgrp.close()
@@ -42,7 +42,7 @@ class BinaryResultReader:
         mylonRange = (np.arange(lonrange[0], lonrange[1], 0.25)*4).astype(np.int32)
         mylatRange = (np.arange(latrange[0], latrange[1], -0.25)*4).astype(np.int32)
         mylonRange += 180*4
-        mylatRange -= 90*4
+        mylatRange = 90*4 - mylatRange
         img = data[mylatRange]
         img = img[:,mylonRange]
         return img
@@ -84,7 +84,7 @@ class CDFReader:
 
         # Set the local values first
         local_latrange, local_lonrange, local_levelrange, local_warpmask = getLocalValues(rootgrp, latrange, lonrange, levelrange, lat_step, lon_step, warpmask)
-        
+       
         # Read the values from the file
         myImage = extractImageFromCDFh5pyChunkedSlim1dAfterNormGeneralDerivativeAndCache(rootgrp, variables, local_latrange, local_lonrange, local_levelrange, self.asHDF5)
 
