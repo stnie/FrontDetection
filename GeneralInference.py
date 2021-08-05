@@ -25,6 +25,7 @@ from IOModules.csbReader import *
 from NetInfoImport import *
 
 from FrontPostProcessing import filterFronts, filterFrontsFreeBorder
+#from geopy import distance
 
 
 class CSIEvaluator():
@@ -321,10 +322,11 @@ class CSIEvaluator():
         # earth radius in km
         latRes = 180/np.abs(res[0])+1
         lonRes = 360/np.abs(res[1])
-        radius = 6371
+        radius = 6371.009
         rad1 = self.pixelToAngle(c1, latRes, lonRes, res[0], res[1])
         rad2 = self.pixelToAngle(c2, latRes, lonRes, res[0], res[1])
-
+        #print(distance.great_circle(rad1[:,0]*180/np.pi, rad2[:,0]*180/np.pi).km)
+        #print(self.getOnSphereDistance(rad1[:,0], rad2[:,0], radius))
         return self.getOnSphereDistance(rad1,rad2, radius)
 
     def pixelToAngle(self, p, latRes, lonRes, latStep, lonStep):
@@ -550,7 +552,7 @@ def setupDataset(args):
 def setupDataLoader(data_set, args):
     # Create DataLoader 
     sampler = SequentialSampler(data_set)
-    numWorkers = 8
+    numWorkers = 0
     if(args.ETH):
         numWorkers = 0
     loader = DataLoader(data_set, shuffle=False, 

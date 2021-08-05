@@ -33,7 +33,10 @@ from FrontPostProcessing import filterFronts
 import netCDF4
 
 from era5dataset.ERA5Reader.readNetCDF import equivalentPotentialTemp
-
+from metpy.calc import equivalent_potential_temperature, dewpoint_from_specific_humidity, relative_humidity_from_specific_humidity
+from metpy.units import units
+from geopy import distance
+from scipy.optimize import root_scalar
 
 
 class DistributedOptions():
@@ -91,11 +94,12 @@ def setupDataset(args):
         if(args.NWS):
             mapTypes = {"hires": ("hires", (90, -89.75), (-180, 180), (-0.25,0.25)) }
     else:
-        cropsize = (184,360)
-        mapTypes = {"NA": ("NA", (76,30.25), (-50,40), (-stepsize, stepsize), None)}
+        # add another 5 degree to the input, such that we can savely extract lines from fronts at the corner of evaluation
+        cropsize = (56*4,100*4)
+        mapTypes = {"NA": ("NA", (76+5,30.25-5), (-50-5,40+5), (-stepsize, stepsize), None)}
         if(args.NWS):
-            cropsize = (184, 344) 
-            mapTypes = {"hires": ("hires", (76, 30.25), (-141, -55), (-stepsize,stepsize), None) }
+            cropsize = (56*4, 96*4) 
+            mapTypes = {"hires": ("hires", (76+5, 30.25-5), (-141-5, -55+5), (-stepsize,stepsize), None) }
     # only atlantic 
     if(False):
         cropsize = (120,160)
@@ -137,7 +141,7 @@ def setupDataset(args):
     
 
     # Create Dataset
-    data_set = WeatherFrontDataset(data_dir=data_fold, label_dir=label_fold, mapTypes = mapTypes, levelRange = myLevelRange, transform=myTransform, outSize=cropsize, labelThickness= labelThickness, label_extractor = myLabelExtractor, era_extractor = myEraExtractor, has_subfolds = (True, False), asCoords = False, removePrefix = 8)
+    data_set = WeatherFrontDataset(data_dir=data_fold, label_dir=label_fold, mapTypes = mapTypes, levelRange = myLevelRange, transform=myTransform, outSize=cropsize, labelThickness= labelThickness, label_extractor = myLabelExtractor, era_extractor = myEraExtractor, has_subfolds = (True, False), asCoords = False, removePrefix = 3)
     return data_set
 
 
@@ -152,7 +156,7 @@ def setupDataLoader(data_set, args):
 
     loader = DataLoader(data_set, shuffle=False, 
     batch_size = 1, sampler = sampler, pin_memory = True, 
-    collate_fn = collate_wrapper(args.stacked, False, 0), num_workers = 8)
+    collate_fn = collate_wrapper(args.stacked, False, 0), num_workers = 0)
     return loader
 
 def bilinear_interpolate(im, x, y):
@@ -181,7 +185,31 @@ def bilinear_interpolate(im, x, y):
 
     return wa*Ia + wb*Ib + wc*Ic + wd*Id
 
-def getValAlongNormal(image, var, udir, vdir, length, border, grad, orientation):
+def getSamplePosition(py, px, ydir, xdir, length):
+    myYpoints = py - np.arange(-length, length+1)*ydir
+    myXpoints = px + np.arange(-length, length+1)*xdir
+    return myYpoints,myXpoints
+
+def getSamplePositionCirc(source, offset, ydir, xdir, length):
+
+    dist = 20
+    py = source[0]+offset[0]
+    px = source[1]+offset[1]
+    xdists = np.zeros(2*length+1)     
+    ydists = np.zeros_like(xdists)
+    pyd = (90-py*0.25)
+    pxd = -180 + px*0.25
+
+    for l in range(-length, length+1,1):
+        dest = distance.distance(kilometers=l*dist).destination((pyd, pxd), np.angle(ydir+1j*xdir)*180/np.pi)
+        # get pixel posiitions 
+        xdists[l+length] = (dest[1]+180)*4-offset[1]
+        ydists[l+length] = (90-dest[0])*4-offset[0]
+    return ydists, xdists
+
+
+
+def getValAlongNormal(image, var, udir, vdir, length, border, grad, orientation, offset):
     directional = False
     avgVar = np.zeros((2*length+1, image.shape[2]))
     sqavgVar = np.zeros((2*length+1, image.shape[2]))
@@ -222,6 +250,7 @@ def getValAlongNormal(image, var, udir, vdir, length, border, grad, orientation)
             for mx in range(-negRang,posRang):
                 for my in range(-negRang,posRang):
                     myVal = myRegion[my+negRang,mx+negRang]
+                    # we do not flip the sign, as we implicitly convert the y axis into a northward axis from southward
                     myDist = np.array([mx,my])
                     if(abs(ori) > np.pi/4 and abs(ori) < 3*np.pi/4):
                         if(mx < 0):
@@ -251,7 +280,9 @@ def getValAlongNormal(image, var, udir, vdir, length, border, grad, orientation)
                 continue
 
             myNeighborhood /= np.linalg.norm(myNeighborhood)
+            # myYdir is northward
             myYdir = myNeighborhood[0]
+            # myXdir is eastward
             myXdir = myNeighborhood[1]
             
             # normalize direction
@@ -259,9 +290,13 @@ def getValAlongNormal(image, var, udir, vdir, length, border, grad, orientation)
             myXdir /= myLen
             myYdir /= myLen
             
-            
-            pointsY = py-myYdir*np.arange(-length,length+1)
-            pointsX = px+myXdir*np.arange(-length,length+1)
+            # get a better estimation respecting the projection 
+            pointsY, pointsX = getSamplePositionCirc((py, px), offset, myYdir, myXdir, length)
+            #pointsY, pointsX = getSamplePosition(py, px, myYdir, myXdir, length)
+            #pointsY = py-myYdir*np.arange(-length,length+1)
+            #pointsX = px+myXdir*np.arange(-length,length+1)
+
+            #print("mypts:", py, px, pointsY, pointsX, flush=True)
             # get the mean wind along the normal
             direction = [np.mean(bilinear_interpolate(udir, pointsX, pointsY)), np.mean(bilinear_interpolate(vdir, pointsX,pointsY))]
             # get the dot product of mean wind along the normal and the normal, to determine whether or not both are in the same direction
@@ -329,9 +364,12 @@ def readSecondary(rootgrp, var, time, level, latrange, lonrange):
 
 
 def performInference(model, loader, num_samples, parOpt, args):
-    length = 8
+    
+    # 10 pixel in each direction a 20 km = 200km before and after front are checked
+    length = 10
     out_channels = 4
-    border = 20
+    # border has a size of 20 pixel due to the network and an additional 20 pixel buffer for the sampling along the normal
+    border = 40
     avgVar = np.zeros((2*length+1, out_channels))
     sqavgVar = np.zeros((2*length+1, out_channels))
     numPoints = np.zeros((out_channels))
@@ -370,6 +408,9 @@ def performInference(model, loader, num_samples, parOpt, args):
         if("_z" in args.calcVar and month == "02" and day == "29"):
             continue
         mapType = "hires" if args.NWS else "NA"
+        latoff= (data_set.mapTypes[mapType][1][0]-90)/data_set.mapTypes[mapType][3][0]
+        lonoff= (data_set.mapTypes[mapType][2][0]+180)/data_set.mapTypes[mapType][3][1]
+        print(latoff, lonoff)
 
         # determine variable, which should be evaluated
         if(args.calcVar == "t" or args.calcVar == "dt"):
@@ -395,10 +436,12 @@ def performInference(model, loader, num_samples, parOpt, args):
             newFile = "/lustre/project/m2_jgu-w2w/ipaserver/ERA5/{0}/{1}/Z{0}{1}{2}_{3}.nc".format(year,month,day,hour)
             rootgrp = netCDF4.Dataset(os.path.realpath(newFile), "r", format="NETCDF4", parallel=False)
             tgt_latrange, tgt_lonrange = data_set.getCropRange(data_set.mapTypes[mapType][1], data_set.mapTypes[mapType][2], data_set.mapTypes[mapType][3], 0)
-            t = readSecondary(rootgrp, "var130", 0, 9, tgt_latrange, tgt_lonrange)
+            t = units.Quantity(readSecondary(rootgrp, "var130", 0, 9, tgt_latrange, tgt_lonrange), "K")
             q = readSecondary(rootgrp, "var133", 0, 9, tgt_latrange, tgt_lonrange)
-            ept = equivalentPotentialTemp(t,q,85000)
-            var = torch.from_numpy(ept)
+            p = units.Quantity(85000, "Pa")
+            dewp = dewpoint_from_specific_humidity(p,t,q)
+            ept = equivalent_potential_temperature(p,t,dewp)
+            var = torch.from_numpy(ept.magnitude)
             rootgrp.close()
         elif(args.calcVar == "t_z" or args.calcVar == "dt_z"):
             grad = args.calcVar == "dt_z"
@@ -419,6 +462,19 @@ def performInference(model, loader, num_samples, parOpt, args):
             #q = rootgrp["var133"][0,9,int(90-tgt_latrange[0])*4:int(90-tgt_latrange[1])*4, int(tgt_lonrage[0])*4:int(tgt_lonrage[1])*4]
             q = readSecondary(rootgrp, "var133", 0, 9, tgt_latrange, tgt_lonrange)
             var = torch.from_numpy(q)
+            rootgrp.close()
+        elif(args.calcVar == "rq_z" or args.calcVar == "drq_z"):
+            grad = args.calcVar == "dq_z"
+            var = inputs[0,9*8+8]
+            newFile = "/lustre/project/m2_jgu-w2w/ipaserver/ERA5/{0}/{1}/Z{0}{1}{2}_{3}.nc".format(year,month,day,hour)
+            rootgrp = netCDF4.Dataset(os.path.realpath(newFile), "r", format="NETCDF4", parallel=False)
+            tgt_latrange, tgt_lonrange = data_set.getCropRange(data_set.mapTypes[mapType][1], data_set.mapTypes[mapType][2], data_set.mapTypes[mapType][3], 0)
+            #q = rootgrp["var133"][0,9,int(90-tgt_latrange[0])*4:int(90-tgt_latrange[1])*4, int(tgt_lonrage[0])*4:int(tgt_lonrage[1])*4]
+            t = units.Quantity(readSecondary(rootgrp, "var130", 0, 9, tgt_latrange, tgt_lonrange), "K")
+            q = readSecondary(rootgrp, "var133", 0, 9, tgt_latrange, tgt_lonrange)
+            p = units.Quantity(85000, "Pa")
+            rq = relative_humidity_from_specific_humidity(p,t,q)
+            var = torch.from_numpy(rq.magnitude)
             rootgrp.close()
         elif(args.calcVar == "winddir"):
             # wind speed
@@ -485,7 +541,7 @@ def performInference(model, loader, num_samples, parOpt, args):
                     distImg = distance_transform_edt(1-(outputs[:,:,channel]), return_distances = True, return_indices = False) <= 3
                     frontImage[:,:,channel] = frontImage[:,:,channel]*distImg
         
-        curravg, currsqavg, currnumPoints = getValAlongNormal(frontImage, var.cpu().numpy(), udir.cpu().numpy(), vdir.cpu().numpy(), length, border, grad, orientation)
+        curravg, currsqavg, currnumPoints = getValAlongNormal(frontImage, var.cpu().numpy(), udir.cpu().numpy(), vdir.cpu().numpy(), length, border, grad, orientation, (latoff,lonoff))
         avgVar += curravg
         sqavgVar += currsqavg
         numPoints += currnumPoints
@@ -573,11 +629,11 @@ if __name__ == "__main__":
     varName = genName+"var"
     avg_error.tofile(meanName+".bin")
     var_error.tofile(varName+".bin")
-    plt.plot(np.arange(-8,9), avg_error )
+    plt.plot(np.arange(-10,11), avg_error )
     plt.legend(["warm","cold","occ","stnry"])
     plt.savefig(meanName+".png")
     plt.clf()
-    plt.plot(np.arange(-8,9), var_error)
+    plt.plot(np.arange(-10,11), var_error)
     plt.legend(["warm","cold","occ","stnry"])
     plt.savefig(varName+".png")
         

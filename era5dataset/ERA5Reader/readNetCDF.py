@@ -822,8 +822,14 @@ def equivalentPotentialTempNew(temp, humidity, PaPerLevel):
     for i in range(len(PaPerLevel)):
         equiPotTemp[i] *= pow((1000/PaPerLevel[i]), Rd/cp)*np.exp(L*m[i] / (cp*temp[i]))
     return equiPotTemp
+ 
 
 def equivalentPotentialTemp(t, q, PaPerLevel):
+    #pu = units.Quantity(p, "Pa")
+    #tu = units.Quantity(t, "K")
+    #dewp = dewpoint_from_specific_humidity(pu, tu, q)
+    #return equivalent_potential_temperature(pu, tu, dewp)
+    '''
     # celsius temp
     ctemp = t-273.15
 
@@ -847,6 +853,7 @@ def equivalentPotentialTemp(t, q, PaPerLevel):
     ctemp *= np.power(100000/PaPerLevel, val)
 
     return ctemp
+    '''
 
 def getValueRanges(variable):
     minval,maxval = 0,1
