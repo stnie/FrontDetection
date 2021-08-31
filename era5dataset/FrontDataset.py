@@ -23,7 +23,7 @@ def datanameToLabelname(filename, mapTypes, removePrefix):
 # Dataset Class 
 class WeatherFrontDataset(Dataset):
     """Front dataset."""
-    def __init__(self, data_dir, label_dir = None, mapTypes = {"NA": ("", (35,70), (-40,35), (0.25,0.25), (1,1), None) }, levelRange = None, transform=None, outSize = None, printFileName = False, labelThickness = 2, label_extractor = None, asCoords = False, era_extractor = DefaultEraExtractor, has_subfolds = (False, False), removePrefix = 0):
+    def __init__(self, data_dir, label_dir = None, mapTypes = {"NA": ("", (35,70), (-40,35), (0.25,0.25), (1,1), None) }, levelRange = None, transform=None, outSize = None, printFileName = False, labelThickness = 2, label_extractor = None, asCoords = False, era_extractor = DefaultEraExtractor, has_subfolds = (False, False), removePrefix = 0, halfResEval = False):
         """
         Args:
             data_dir (string):      Directory with all the images.
@@ -69,6 +69,9 @@ class WeatherFrontDataset(Dataset):
         # Extract in a km grid instead of lat lon
         self.extractRegularGrid = False
 
+        # is the evlauation to be on halfRes
+        self.halfRes = halfResEval
+
         # Are labels provided? Else do not return labels
         self.has_label = (not label_dir is None and not label_extractor is None)
         if label_extractor is None:
@@ -88,9 +91,11 @@ class WeatherFrontDataset(Dataset):
             for fold in os.listdir(self.data_dir):
                 for filen in os.listdir(os.path.join(self.data_dir, fold)):
                     if("B20" in filen):
-                        pass
+                        continue
                     if(self.removePrefix == 8 and not ( "_00" in filen or "_06" in filen or "_12" in filen or "_18" in filen)):
-                        pass
+                        continue
+                    if(self.removePrefix == 3 and not "bml" in filen):
+                        continue
                     else:
                         # if the dataset extracts labels, check if the corresponding labels exist
                         if(self.has_label):
@@ -109,6 +114,8 @@ class WeatherFrontDataset(Dataset):
         else:
             self.fileList = []
             for filen in os.listdir(self.data_dir):
+                if("B20" in filen):
+                    continue
                 if(self.has_label):
                     potLabel = datanameToLabelname(filen, self.mapTypes, self.removePrefix)
                     labelExists = False
@@ -162,7 +169,7 @@ class WeatherFrontDataset(Dataset):
                     front_name = datanameToLabelname(filename, self.mapTypes, self.removePrefix)
             mapType, front_name = self.getProjectionTypeAndFilePath(front_name)
             # To distinguish the output name
-            filename = os.path.splitext(filename)[0]+mapType+os.path.splitext(filename)[1]
+            #filename = os.path.splitext(filename)[0]+mapType+os.path.splitext(filename)[1]
             # Read Label Data
             #print("label:", filename)
             #print(front_name, mapType, filename)
@@ -249,7 +256,10 @@ class WeatherFrontDataset(Dataset):
 
     def getLabel(self, filename, latrange, lonrange, res, types, seed):
         tgt_latrange, tgt_lonrange = self.getCropRange(latrange, lonrange, res, seed)
-        return self.label_extractor(filename, (tgt_latrange[0], tgt_latrange[1]), (tgt_lonrange[0], tgt_lonrange[1]), res, types)
+        if(self.halfRes):
+            return self.label_extractor(filename, (tgt_latrange[0], tgt_latrange[1]), (tgt_lonrange[0], tgt_lonrange[1]), (res[0]*2, res[1]*2), types)
+        else:
+            return self.label_extractor(filename, (tgt_latrange[0], tgt_latrange[1]), (tgt_lonrange[0], tgt_lonrange[1]), res, types)
 
     def getMask(self, mask, latrange, lonrange, res, seed):
         tgt_latrange, tgt_lonrange = self.getCropRange(latrange, lonrange, res, seed)

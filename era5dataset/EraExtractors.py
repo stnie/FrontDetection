@@ -2,7 +2,7 @@ import numpy as np
 import os
 import random
 
-from .ERA5Reader.readNetCDF import CDFReader, ETHReader, LatTokmPerLon
+from .ERA5Reader.readNetCDF import CDFReader, ETHReader, LatTokmPerLon, BinaryResultReader
 
 class DefaultEraExtractor():
     # Determine which variables should be extracted
@@ -29,15 +29,24 @@ class ETHEraExtractor():
             exit(1)
             return self.reader.read(filename, latrange, lonrange)
         return self.reader.read(filename, latrange, lonrange)
-        
+       
+class BinaryResultExtractor():
+    def __init__(self):
+        self.reader = BinaryResultReader()
+    def __call__(self, filename, latrange, lonrange, levelrange, seed = 0, warpmask = None):
+        if isinstance(filename, list):
+            print("Currently not correct!")
+            exit(1)
+            return self.reader.read(filename, latrange, lonrange)
+        return self.reader.read(filename, latrange, lonrange)
 
 
 # EraExtractor that inverses gradients if a corresponding flip occurs during transformation
 class DerivativeFlippingAwareEraExtractor():
     # Determine which variables should be extracted
-    def __init__(self, variables = ['t','q','u','v','w'], horizontal_indices = None, vertical_indices = None, fliprate = 0.5, horizontal_flipPos = 0, vertical_flipPos = 1, normType = 0, sharedObj = None):
+    def __init__(self, variables = ['t','q','u','v','w'], horizontal_indices = None, vertical_indices = None, fliprate = 0.5, horizontal_flipPos = 0, vertical_flipPos = 1, normType = 0, sharedObj = None, ftype = 0):
         # Create a CDF Reader using h5py and min max normalization
-        self.reader = CDFReader(0, normType = normType, sharedObj = sharedObj)
+        self.reader = CDFReader(ftype, normType = normType, sharedObj = sharedObj)
         
         self.variables = variables
         latoffs = []

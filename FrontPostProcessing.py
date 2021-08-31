@@ -22,3 +22,24 @@ def filterFronts(image, border):
                 labeledImage[points] = 0
         filteredImage[:,border:-border,border:-border,channel] = (labeledImage>0)*1
     return filteredImage
+
+def filterFrontsFreeBorder(image, northBorder, southBorder, westBorder, eastBorder):
+    threshold = 0.45
+    minlen = 2
+    filteredImage = np.zeros_like(image)
+    numChannels = image.shape[-1]
+    assert(numChannels > 1)
+    for channel in range(numChannels):
+        thinImg = image[:,northBorder:-southBorder, westBorder:-eastBorder,channel]>threshold
+        labeledImage = morphology.binary_dilation(thinImg, selem = np.ones((1,3,3)))
+        #labeledImage = morphology.skeletonize(labeledImage)
+        labeledImage = measure.label(labeledImage, background = 0)
+        labeledImage *= thinImg
+        numLabels = np.max(labeledImage)
+        for pidx in range(1,numLabels+1):
+            singleLabel = (labeledImage == pidx)*1
+            points = np.nonzero(singleLabel)
+            if len(points[0]) < minlen:
+                labeledImage[points] = 0
+        filteredImage[:,northBorder:-southBorder,westBorder:-eastBorder,channel] = (labeledImage>0)*1
+    return filteredImage
