@@ -50,6 +50,7 @@ def parseArguments():
     parser.add_argument('--net', help='path no net')
     parser.add_argument('--data', help='path to folder containing data')
     parser.add_argument('--label', type = str, default = None, help='path to folder containing label')
+    parser.add_argument('--season', type = str, default = "all", help='season to calculate for (djf, mam, jja, son) , default whole year is take')
     parser.add_argument('--outname', help='name of the output')
     parser.add_argument('--disable-cuda', action='store_true', help='Disable CUDA')
     parser.add_argument('--device', type = int, default = 0, help = "number of device to use")
@@ -226,7 +227,7 @@ def performInference(model, loader, num_samples, parOpt, args):
     skip = 0
     var = np.zeros((percentile_99.shape[0], percentile_99.shape[1]))
     # holds all outputs for this dataset
-    #quick_out = np.zeros((percentile_99.shape[0], percentile_99.shape[1], 5), dtype = np.bool
+    # quick_out = np.zeros((percentile_99.shape[0], percentile_99.shape[1], 5), dtype = np.bool
     # should we infer each file and iteratively build the maps
     fromInfer=False
     if(fromInfer):
@@ -296,45 +297,96 @@ def performInference(model, loader, num_samples, parOpt, args):
                 #total_front_agg[monthID, ftype] += front_agg
     else:
         # We have complete files containing all the necessary information, so we can directly load those
-
-        # load the map with all front-events
-        frontFile = "/lustre/project/m2_jgu-binaryhpc/Front_Detection_Data/PercentileData/Masks/tmp2016_front4d_l2.bin"
-        allFrontEvents = np.fromfile(frontFile, dtype=np.bool).reshape(-1, 680, 1400, 5)
-        num_samples = allFrontEvents.shape[0]
-        # load the map with all precipitation extrem events
-        precipFile = "/lustre/project/m2_jgu-binaryhpc/Front_Detection_Data/PercentileData/Masks/tmp2016_eventMask.nc"
-        rootgrp = netCDF4.Dataset(os.path.realpath(precipFile), "r", format="NETCDF4", parallel=False)
-        tgt_latrange, tgt_lonrage = data_set.getCropRange(data_set.mapTypes[mapType][1], data_set.mapTypes[mapType][2], data_set.mapTypes[mapType][3], 0)
-        allExtremeEvents = np.zeros((num_samples, 720, 1440))
-        if(tgt_lonrage[0] < 0 and tgt_lonrage[1] >= 0):
-            allExtremeEvents[:,:-int(tgt_lonrage[0])*4] =  rootgrp["tp"][:num_samples,int(90-tgt_latrange[0])*4:int(90-tgt_latrange[1])*4, int(tgt_lonrage[0])*4:]
-            allExtremeEvents[:,-int(tgt_lonrage[0])*4:] = rootgrp["tp"][:num_samples,int(90-tgt_latrange[0])*4:int(90-tgt_latrange[1])*4, :int(tgt_lonrage[1])*4]
+        extreme_Influence = True
+        # read the undilated file instead
+        if(extreme_Influence):
+            frontFile = "/lustre/project/m2_jgu-binaryhpc/Front_Detection_Data/Results2016SingleFile/all_concat.bin"
+            allFrontEvents = np.fromfile(frontFile, dtype=np.bool).reshape(-1, 720, 1440, 5)
+            allFrontEvents = allFrontEvents[:,20:-20,20:-20]
         else:
-            allExtremeEvents = rootgrp["tp"][:num_samples,int(90-tgt_latrange[0])*4:int(90-tgt_latrange[1])*4, int(tgt_lonrage[0])*4:int(tgt_lonrage[1])*4]
+            # load the map with all front-events
+            frontFile = "/lustre/project/m2_jgu-binaryhpc/Front_Detection_Data/PercentileData/Masks/tmp2016_front4d_l2.bin"
+            allFrontEvents = np.fromfile(frontFile, dtype=np.bool).reshape(-1, 680, 1400, 5)
+        num_samples = allFrontEvents.shape[0]
+        for x in range(5):
+            imsave("mytest{}.png".format(x), allFrontEvents[0,:,:,x])
+        # load the map with all precipitation extrem events
+        precipFile = "/lustre/project/m2_jgu-binaryhpc/Front_Detection_Data/PercentileData/Masks/tmp2016_eventMask_{}.nc".format(args.season)
+        rootgrp = netCDF4.Dataset(os.path.realpath(precipFile), "r", format="NETCDF4", parallel=False)
+        num_samples = rootgrp["time"][:].shape[0]
+        tgt_latrange, tgt_lonrage = data_set.getCropRange(data_set.mapTypes[mapType][1], data_set.mapTypes[mapType][2], data_set.mapTypes[mapType][3], 0)
+        tgtType = np.bool
+        allExtremeEvents = np.zeros((num_samples, 720, 1440), dtype=tgtType)
+        print("num_samples for season {} is {}".format(args.season, num_samples))
+        if(tgt_lonrage[0] < 0 and tgt_lonrage[1] >= 0):
+            allExtremeEvents[:,:,:-int(tgt_lonrage[0])*4] =  rootgrp["tp"][:num_samples,int(90-tgt_latrange[0])*4:int(90-tgt_latrange[1])*4, int(tgt_lonrage[0])*4:].astype(tgtType)
+            allExtremeEvents[:,:,-int(tgt_lonrage[0])*4:] = rootgrp["tp"][:num_samples,int(90-tgt_latrange[0])*4:int(90-tgt_latrange[1])*4, :int(tgt_lonrage[1])*4].astype(tgtType)
+        else:
+            allExtremeEvents = rootgrp["tp"][:num_samples,int(90-tgt_latrange[0])*4:int(90-tgt_latrange[1])*4, int(tgt_lonrage[0])*4:int(tgt_lonrage[1])*4].astype(tgtType)
+        allExtremeEvents= allExtremeEvents[:,border:-border,border:-border]
+        # we need to find all points that are influenced by the extreme event instead => l2 norm dilation is necessary
+        if(extreme_Influence):
+            for x in range(num_samples):
+                print("Widening extreme Event {}".format(x), flush = True)
+                allExtremeEvents[x] = distance_transform_edt(1-allExtremeEvents[x]) <= 10
+        imsave("mytestextremes.png", allExtremeEvents[0])
 
         # create the count maps
         dpm = np.array([0,31,29,31,30,31,30,31,31,30,31,30,31])
-        tsf = np.cumsum(dpm)*24
-        for m in range(12):
-            total_fronts[m] = np.sum(allFrontEvents[tsf[m]:tsf[m+1]], axis = 0)
-            total_extreme_events[m] = np.sum(allExtremeEvents[tsf[m]:tsf[m+1]], axis=0)
+        dps = dpm*1
+        ssf = np.cumsum(dpm)*24
+        tgt_season = args.season 
+        if(tgt_season == "djf"):
+            #the file orders it chronologically so its jf d
+            allFrontEvents = np.concatenate((allFrontEvents[:ssf[2]], allFrontEvents[ssf[11]:ssf[12]]), axis=0)
+            dps =np.array([0,31,29,31])
+            total_fronts = total_fronts[:3]
+            total_extreme_events = total_extreme_events[:3]
+            total_front_extreme_events = total_front_extreme_events[:3]
+        elif(tgt_season == "mam"):
+            allFrontEvents = allFrontEvents[ssf[2]:ssf[5]]
+            dps =np.array([0,31,30,31])
+            total_fronts = total_fronts[:3]
+            total_extreme_events = total_extreme_events[:3]
+            total_front_extreme_events = total_front_extreme_events[:3]
+        elif(tgt_season == "jja"):
+            allFrontEvents = allFrontEvents[ssf[5]:ssf[8]]
+            dps =np.array([0,30,31,31])
+            total_fronts = total_fronts[:3]
+            total_extreme_events = total_extreme_events[:3]
+            total_front_extreme_events = total_front_extreme_events[:3]
+        elif(tgt_season == "son"):
+            allFrontEvents = allFrontEvents[ssf[8]:ssf[11]]
+            dps =np.array([0,30,31,30])
+            total_fronts = total_fronts[:3]
+            total_extreme_events = total_extreme_events[:3]
+            total_front_extreme_events = total_front_extreme_events[:3]
+        tsf = np.cumsum(dps)*24
+        print("all data loaded")
+        for m in range(len(dps)-1):
+            print("front and extreme for month {}".format(m))
+            for ft in range(5):
+                total_fronts[m,ft] = np.sum(allFrontEvents[tsf[m]:tsf[m+1],:,:,ft], axis = 0)
+                total_extreme_events[m] = np.sum(allExtremeEvents[tsf[m]:tsf[m+1]], axis=0)
         for ft in range(5):
             allFrontEvents[:,:,:,ft] *= allExtremeEvents
-        for m in range(12):
-            total_front_extreme_events[m] = np.sum(allFrontEvents[tsf[m]:tsf[m+1]], axis = 0)
+        for m in range(len(dps)-1):
+            print("front with extreme for month {}".format(m))
+            for ft in range(5):
+                total_front_extreme_events[m,ft] = np.sum(allFrontEvents[tsf[m]:tsf[m+1],:,:,ft], axis = 0)
         Extreme_Event_count = np.sum(total_extreme_events, axis= 0)
         Front_Extreme_Event_count = np.sum(total_front_extreme_events, axis= 0)
 
 
 
-    if(Event_count > 0):
-        print("matched Front and Event:", Front_Event_count, "total events:", Event_count, "ratio:", Front_Event_count / Event_count)
-    else:
-        print("No Events")
-    if(Extreme_Event_count > 0):
-        print("matched Front and Extreme Event:", Front_Extreme_Event_count, "total extreme events:", Extreme_Event_count, "ration", Front_Extreme_Event_count/Extreme_Event_count, flush = True)
-    else:
-        print("No Extreme Events", flush = True)
+    #if(Event_count > 0):
+    #    print("matched Front and Event:", Front_Event_count, "total events:", Event_count, "ratio:", Front_Event_count / Event_count)
+    #else:
+    #    print("No Events")
+    #if(Extreme_Event_count > 0):
+    #    print("matched Front and Extreme Event:", Front_Extreme_Event_count, "total extreme events:", Extreme_Event_count, "ration", Front_Extreme_Event_count/Extreme_Event_count, flush = True)
+    #else:
+    #    print("No Extreme Events", flush = True)
 
     return [Event_count, Extreme_Event_count, Front_Event_count, Front_Extreme_Event_count], [total_events, total_extreme_events, total_front_events, total_front_extreme_events, total_fronts]
 
@@ -406,11 +458,11 @@ if __name__ == "__main__":
     Ei, EEi, FEi, FEEi, Fi = images
     if(not os.path.isdir(name)):
         os.mkdir(name)
-    En = os.path.join(name, "events")
-    EEn = os.path.join(name, "extreme_events")
-    FEn = os.path.join(name, "front_events")
-    FEEn = os.path.join(name, "front_extreme_events")
-    Frn = os.path.join(name, "fronts")
+    En = os.path.join(name, "events_"+args.season)
+    EEn = os.path.join(name, "extreme_events_"+args.season)
+    FEn = os.path.join(name, "front_events_"+args.season)
+    FEEn = os.path.join(name, "front_extreme_events_"+args.season)
+    Frn = os.path.join(name, "fronts_"+args.season)
     #imsave(En+".png", Ei)
     #imsave(EEn+".png", EEi)
     #imsave(FEn+".png", FEi)
@@ -423,5 +475,5 @@ if __name__ == "__main__":
     FEi.tofile(FEn+".bin")
     FEEi.tofile(FEEn+".bin")
     Fi.tofile(Frn+".bin")
-    np.array(counts).tofile("counts.bin")
+    #np.array(counts).tofile("counts_"+args.season+".bin")
         

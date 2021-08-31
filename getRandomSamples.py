@@ -34,15 +34,7 @@ import netCDF4
 from statsmodels.regression.quantile_regression import QuantReg
 import statsmodels.api as sm
 
-class DistributedOptions():
-    def __init__(self):
-        self.myRank = -1
-        self.device = -1
-        self.local_rank = -1
-        self.world_size = -1
-        self.nproc_per_node = -1
-        self.nnodes = -1
-        self.node_rank = -1
+from InferOutputs import setupModel, setupDataLoader, inferResults, setupDevice, filterChannels, DistributedOptions
 
 
 def parseArguments():
@@ -70,19 +62,8 @@ def parseArguments():
     
     return args
 
-def setupDevice(args):
-    parOpt = DistributedOptions()
-    parOpt.myRank = 0
-    if not args.disable_cuda and torch.cuda.is_available():
-        torch.cuda.set_device(args.device)
-        parOpt.device = torch.device('cuda')
-    else:
-        parOpt.device = torch.device('cpu')
-    return parOpt
-    
 def setupDataset(args):
     data_fold = args.data
-    label_fold = args.label
     stepsize = 0.25
     if(args.fullsize):
         cropsize = (720, 1440)
@@ -116,22 +97,6 @@ def setupDataset(args):
     return data_set
 
 
-
-
-    
-
-def setupDataLoader(data_set, args):
-    # Create DataLoader 
-    indices = list(range(len(data_set)))
-    sampler = SequentialSampler(data_set)
-
-    loader = DataLoader(data_set, shuffle=False, 
-    batch_size = 1, sampler = sampler, pin_memory = True, 
-    collate_fn = collate_wrapper(args.stacked, False, 0), num_workers = 8)
-    return loader
-
-
-
 def performInference(loader, num_samples, parOpt, args):
     border = 20
     
@@ -141,12 +106,19 @@ def performInference(loader, num_samples, parOpt, args):
     data_set = loader.dataset
     no = data_set.removePrefix
     mapType = "hires" if args.NWS else "NA"
+    
+    # get the day per month
+    dpm = [0,31,29,31,30,31,30,31,31,30,31,30,31]
+    # cumulative sum to get the number of hours since YYYY-12-01_00
+    ssf = np.cumsum(np.array(dpm))*24
+    seasons = ["djf", "mam", "jja", "son"]
+    tgt_season = args.tgtseason
 
     tgtvar = ""
     if args.calcVar == "precip":
-        front_file = "/lustre/project/m2_jgu-binaryhpc/Front_Detection_Data/PercentileData/tmp2016_frontprop.nc"
+        front_file = "/lustre/project/m2_jgu-binaryhpc/Front_Detection_Data/PercentileData/Masks/tmp2016_frontprop.nc"
         tgtvar = "tp"
-        mask_file = "/lustre/project/m2_jgu-binaryhpc/Front_Detection_Data/PercentileData/tmp2016_eventMask.nc"
+        mask_file = "/lustre/project/m2_jgu-binaryhpc/Front_Detection_Data/PercentileData/Masks/tmp2016_eventMask_{}.nc".format(tgt_season)
         height_file = "/lustre/project/m2_jgu-w2w/ipaserver/ERA5/era5_const.nc"
     elif args.calcVar == "10mwind":
         pct_file = ""
@@ -157,6 +129,7 @@ def performInference(loader, num_samples, parOpt, args):
     skip = 0
     total_fronts = np.zeros((num_samples, 680, 1400, 5), dtype=np.bool)
     all_fronts = np.zeros((360, 720, 5))
+    
     if(False):
         for idx, data in enumerate(tqdm(loader, desc ='eval'), 0):
             if idx<skip:
@@ -167,57 +140,34 @@ def performInference(loader, num_samples, parOpt, args):
             inputs, labels, filename = data.data.cpu().numpy(), data.labels, data.filenames
             
             year,month,day,hour = filename[0][no:no+4],filename[0][no+4:no+6],filename[0][no+6:no+8],filename[0][no+9:no+11]
-            #if(hour in ["06","12","18","00"]):
-            #    all_fronts += inputs[0]
             inputs = inputs[:,border:-border,border:-border,:]
 
             monthid = int(month)-1
             front = inputs[0]
             for ftype in range(5):
                 front[:,:,ftype] = distance_transform_edt(1-front[:,:,ftype])<=10
-                # reate wide data
-                #for _ in range(Boxsize):
-                #    front[:,:,ftype] = morphology.binary_dilation(front[:,:,ftype])
-                # sum the result to get the total front map
-                #total_fronts[monthid, ftype]  += front[:,:,ftype]
             total_fronts[idx,:,:,:] = front[:,:,:].astype(np.bool)
-        #all_fronts.tofile("compareAgainstClimatology.bin")
         total_fronts.tofile("/lustre/project/m2_jgu-binaryhpc/Front_Detection_Data/PercentileData/tmp2016_front4d_l2.bin")
     else:
-        pass
-        total_fronts = np.fromfile("/lustre/project/m2_jgu-binaryhpc/Front_Detection_Data/PercentileData/tmp2016_front4d_l2.bin", dtype=np.bool).reshape(num_samples,680,1400,5)
+        total_fronts = np.fromfile("/lustre/project/m2_jgu-binaryhpc/Front_Detection_Data/PercentileData/Masks/tmp2016_front4d_l2.bin", dtype=np.bool).reshape(num_samples,680,1400,5)
         #for x in range(num_samples):
         #    total_fronts[x,:,:,0] = np.sum(total_fronts[x,:,:,1:4],axis=-1).astype(np.bool)
         #total_fronts = np.flip(total_fronts, axis = 0)
 
-    # Read the percentile mask
-    #rootgrp = netCDF4.Dataset(os.path.realpath(front_file), "r", format="NETCDF4", parallel=False)
-    #tgt_latrange, tgt_lonrage = data_set.getCropRange(data_set.mapTypes[mapType][1], data_set.mapTypes[mapType][2], data_set.mapTypes[mapType][3], 0)
-    # the files have lat 90 - -90,   lon 0 - 360
-    # => we need to offset lonrange
-    #fpop = np.zeros((abs(int(tgt_latrange[0])-int(tgt_latrange[1]))*4, abs(int(tgt_lonrage[1])-int(tgt_lonrage[0]))*4))
-    #if(tgt_lonrage[0] < 0 and tgt_lonrage[1] >= 0):
-    #    fpop[:,:-int(tgt_lonrage[0])*4] =  rootgrp["tp"][0,int(90-tgt_latrange[0])*4:int(90-tgt_latrange[1])*4, int(tgt_lonrage[0])*4:]
-    #    fpop[:,-int(tgt_lonrage[0])*4:] = rootgrp["tp"][0,int(90-tgt_latrange[0])*4:int(90-tgt_latrange[1])*4, :int(tgt_lonrage[1])*4]
-    #else:
-    #    fpop = rootgrp[tgtvar][0,int(90-tgt_latrange[0])*4:int(90-tgt_latrange[1])*4, int(tgt_lonrage[0])*4:int(tgt_lonrage[1])*4]
-    #rootgrp.close()
     
     # Read the event mask
     rootgrp = netCDF4.Dataset(os.path.realpath(mask_file), "r", format="NETCDF4", parallel=False)
     tgt_latrange, tgt_lonrage = data_set.getCropRange(data_set.mapTypes[mapType][1], data_set.mapTypes[mapType][2], data_set.mapTypes[mapType][3], 0)
     # the files have lat 90 - -90,   lon 0 - 360
     # => we need to offset lonrange
-    exEvs = np.zeros((num_samples, abs(int(tgt_latrange[0])-int(tgt_latrange[1]))*4, abs(int(tgt_lonrage[1])-int(tgt_lonrage[0]))*4), dtype =np.bool)
+    exEvs = np.zeros((rootgrp["time"][:].shape[0], abs(int(tgt_latrange[0])-int(tgt_latrange[1]))*4, abs(int(tgt_lonrage[1])-int(tgt_lonrage[0]))*4), dtype =np.bool)
+    print(exEvs.shape[0], num_samples)
     if(tgt_lonrage[0] < 0 and tgt_lonrage[1] >= 0):
-        pass
-        exEvs[:,:,:-int(tgt_lonrage[0])*4] =  (rootgrp["tp"][:num_samples,int(90-tgt_latrange[0])*4:int(90-tgt_latrange[1])*4, int(tgt_lonrage[0])*4:]).astype(np.bool)
-        exEvs[:,:,-int(tgt_lonrage[0])*4:] = (rootgrp["tp"][:num_samples,int(90-tgt_latrange[0])*4:int(90-tgt_latrange[1])*4, :int(tgt_lonrage[1])*4]).astype(np.bool)
+        exEvs[:,:,:-int(tgt_lonrage[0])*4] =  (rootgrp[tgtvar][:,int(90-tgt_latrange[0])*4:int(90-tgt_latrange[1])*4, int(tgt_lonrage[0])*4:]).astype(np.bool)
+        exEvs[:,:,-int(tgt_lonrage[0])*4:] = (rootgrp[tgtvar][:,int(90-tgt_latrange[0])*4:int(90-tgt_latrange[1])*4, :int(tgt_lonrage[1])*4]).astype(np.bool)
     else:
-        pass
         exEvs = rootgrp[tgtvar][:,int(90-tgt_latrange[0])*4:int(90-tgt_latrange[1])*4, int(tgt_lonrage[0])*4:int(tgt_lonrage[1])*4]
     rootgrp.close()
-
 
 
     # read the height map and remove all height +5 pixel radius (dilation)
@@ -234,22 +184,19 @@ def performInference(loader, num_samples, parOpt, args):
     rootgrp.close()
 
     #get a filter map for height lower than 3000
-    heightmap.tofile("before.bin")
-    print(np.max(heightmap))
     # transform geopotential to height in m
     heightmap /= 9.80665
-    heightmap.tofile("after.bin")
-    print(np.max(heightmap))
     # get all points above 3000m
-    heightmap = heightmap[border:-border,border:-border] >= 3000
+    heightmap = heightmap[border:-border,border:-border] < 2000
 
     # dilate map by 5
-    numHeightDilation = 5
-    for _ in range(numHeightDilation):
-        heightmap = morphology.binary_dilation(heightmap)
+    #numHeightDilation = 5
+    #for _ in range(numHeightDilation):
+    #    heightmap = morphology.binary_dilation(heightmap)
+    heightmap = distance_transform_edt(heightmap) > 5
 
     #invert the map to get all points which are not considered a mountain
-    heightmap = 1-heightmap
+    #heightmap = 1-heightmap
     heightmap.tofile("heightFilterMap.bin")
 
     #create the 
@@ -258,54 +205,33 @@ def performInference(loader, num_samples, parOpt, args):
     #get Equal ditribution or 1%bins
     rng = np.random.default_rng(12345)
     # 101 propabliliptes, 10 points, 1000 samples, 6 locations, 50 events)
-    #mySamplePoints = np.zeros(101,10,2)
-    #mySamplePos = np.zeros(101,10,1000, 6, 50)
-    # generate the sample points
-    '''
-    for p in range(101):
-        low_p = (p-1) / 10
-        up_p = p/10
-        if(p == 0):
-            allPos = np.nonzero(fpop<=up_p)
-        else:
-            allPos = np.nonzero((fpop<=up_p) * (fpop>(low_p)))
-        rand_points = rng.choice(len(allPos[0]), size=10, replace = False)
-        mySamplePoints[p,:,0] = allPos[0][rand_points]
-        mySamplePoints[p,:,1] = allPos[1][rand_points]
-    '''
 
-
-    dpm = [31,29,31,30,31,30,31,31,30,31,30,31]
-    ssf = np.cumsum(np.array([0]+dpm))*24
-    seasons = ["djf", "mam", "jja", "son"]
-    tgt_season = args.tgtseason
     
     # when evaluating seasons, we should expect less extreme events per season
     casePerPoint = 13
+    pointsPerList = 6
+    evcount = np.sum(exEvs, axis=0)
+    timestamps = num_samples
     if(tgt_season == "djf"):
-        evcount = np.sum(exEvs[ssf[11]:ssf[12]], axis=0)+np.sum(exEvs[:ssf[2]], axis= 0)
-        fpop = (np.sum(total_fronts[ssf[11]:ssf[12]], axis=0)+ np.sum(total_fronts[:ssf[2]], axis=0))/((31+31+29)*24)
+        #the file orders it chronologically so its jf d
+        total_fronts = np.concatenate((total_fronts[:ssf[2]], total_fronts[ssf[11]:ssf[12]]), axis=0)
     elif(tgt_season == "mam"):
-        evcount = np.sum(exEvs[ssf[2]:ssf[5]], axis = 0)
-        fpop = np.sum(total_fronts[ssf[2]:ssf[5]], axis=0)/((31+30+31)*24)
+        total_fronts = total_fronts[ssf[2]:ssf[5]]
     elif(tgt_season == "jja"):
-        evcount = np.sum(exEvs[ssf[5]:ssf[8]], axis = 0)
-        fpop = np.sum(total_fronts[ssf[5]:ssf[8]], axis=0)/((30+31+31)*24)
+        total_fronts = total_fronts[ssf[5]:ssf[8]]
     elif(tgt_season == "son"):
-        evcount = np.sum(exEvs[ssf[8]:ssf[11]], axis = 0)
-        fpop = np.sum(total_fronts[ssf[8]:ssf[11]], axis=0)/((30+31+30)*24)
+        total_fronts = total_fronts[ssf[8]:ssf[11]]
     else:
-        evcount = np.sum(exEvs, axis=0)
-        fpop = np.sum(total_fronts, axis=0)/num_samples
         casePerPoint = 50
+    fpop = np.sum(total_fronts, axis=0)/total_fronts.shape[0]
     # generate the event lists
     # get the total count of extreme events
     # get the ratio of front events 
     
     k = 0
     stepsize = 1
-    fpop = np.concatenate((fpop[100:260],fpop[420:580]),axis=0)
-    heightmap = np.concatenate((heightmap[100:260], heightmap[420:580]), axis=0)
+    fpop = np.concatenate((fpop[100:261],fpop[420:581]),axis=0)
+    heightmap = np.concatenate((heightmap[100:261], heightmap[420:581]), axis=0)
     validHeights = np.nonzero(heightmap)
     num_bpoints = 20
     for k in range(5):
@@ -343,24 +269,24 @@ def performInference(loader, num_samples, parOpt, args):
                 xsmp = xsmpls[point]
                 ysmp = ysmpls[point]
                 myProbArray[p,point,:] = fpop[xsmp,ysmp,k]
-                north = xsmp < 160
+                north = xsmp < 161
                 fr = 420 if north else 100
-                to = 580 if north else 260
-                xoff = 100 if north else 260
+                to = 581 if north else 261
+                xoff = 100 if north else 261
                 hemPos = np.nonzero(evcount[fr:to]>= casePerPoint)
                 for li in range(1000):
                     # draw random points from opposite hemisphere
-                    rps = rng.choice(len(hemPos[0]), size = 6, replace=False)
+                    rps = rng.choice(len(hemPos[0]), size = pointsPerList, replace=False)
                     xposs = hemPos[0][rps]+fr
                     yposs = hemPos[1][rps]
-                    for rp in range(6):
+                    for rp in range(pointsPerList):
                         xpos = xposs[rp]
                         ypos = yposs[rp]
                         t_size = evcount[xpos, ypos]
                         t_begin = rng.integers(low = 0, high=1+t_size-casePerPoint, size = 1)
                         t_list = np.nonzero(exEvs[:,xpos, ypos])[0][t_begin[0]:t_begin[0]+casePerPoint]
                         mySampleArray[p, point, li] += np.sum(total_fronts[t_list, xsmp+xoff,ysmp].astype(np.int16), axis = 0) 
-                    mySampleArray[p, point, li] /= casePerPoint*6
+                    mySampleArray[p, point, li] /= casePerPoint*pointsPerList
                     #print(mySampleArray[p, point, li])
             print(flush=True)
 #                        mySamplePos[p, point, li, rp, :] = t_list[:]
@@ -408,16 +334,12 @@ if __name__ == "__main__":
 
     name = os.path.join("EffectAreas",args.outname)
     
-    ETH = args.ETH
-
-    args.stacked = True
     data_set = setupDataset(args)    
-    loader = setupDataLoader(data_set, args)
+    # 0 worker, to ignore problems caused by the multiprocessing
+    loader = setupDataLoader(data_set, 0)
     
-
     sample_data = data_set[0]
     data_dims = sample_data[0].shape
-
 
     # Data information
     in_channels = data_dims[0]-3*9

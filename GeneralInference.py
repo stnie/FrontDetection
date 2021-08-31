@@ -25,11 +25,13 @@ from IOModules.csbReader import *
 from NetInfoImport import *
 
 from FrontPostProcessing import filterFronts, filterFrontsFreeBorder
+from InferOutputs import setupModel, setupDataLoader, inferResults, setupDevice, filterChannels, DistributedOptions
+
 #from geopy import distance
 
 
 class CSIEvaluator():
-    def __init__(self, args, inlats, inlons, tgtlats, tgtlons, evlats, evlons):
+    def __init__(self, outpath, run_name, args, inlats, inlons, tgtlats, tgtlons, evlats, evlons):
         self.border = args.border
         self.halfRes = args.halfRes
         self.maxDist = args.maxDist
@@ -53,13 +55,33 @@ class CSIEvaluator():
         self.avgCSI = np.zeros((5,7))
         # The input is 5 degree larger than the evaluation area, to reduce any loss of mathches caused by cropping
         self.evCrop = (int((tgtlats[0]-evlats[0])*pixPerDeg), int((evlons[0]-tgtlons[0])*pixPerDeg))
+        self.inlats = inlats
+        self.inlons = inlons
+        self.tgtlats = tgtlats
+        self.tgtlons = tgtlons
+        self.evlats = evlats
+        self.evlons = evlons
             
-        print("in-data degree", inlats, inlons)
-        print("tgt-data degree", tgtlats, tgtlons)
-        print("ev-data degree", evlats, evlons)
+        print("in-data degree", self.inlats, self.inlons)
+        print("tgt-data degree", self.tgtlats, self.tgtlons)
+        print("ev-data degree", self.evlats, self.evlons)
         print("borders pixel (NSWE)", self.northBorder, self.southBorder, self.westBorder, self.eastBorder)
         print("offsets degree (NW)", self.offset)
         print("evcrop pixel (NW) ", self.evCrop)
+        
+        outfolder = os.path.join(outpath, "Predictions")
+        if(not os.path.isdir(outpath)):
+            print("Could not find Output-Path, abort execution")
+            print("Path was: {}".format(outpath))
+            exit(1)
+        if(not os.path.isdir(outfolder)):
+            print("Creating Detection Folder at Output-Path")
+            os.mkdir(outfolder)
+        outname = os.path.join(outfolder, run_name)
+        if(not os.path.isdir(outname)):
+            print("Creating Folder {} to store results".format(run_name))
+            os.mkdir(outname)
+        self.outname = outname
         
     def evaluate(self, labels, predictions, _):
         # downsample if necessary
@@ -92,8 +114,8 @@ class CSIEvaluator():
         globalSR = self.avgCSI[:,5]/self.avgCSI[:,6]
         globalCSI = 1/(1/globalPOD + 1/globalSR - 1)
         if(args.NWS):
-            totalPOD = np.sum(self.avgCSI[1:3,3])/np.sum(self.avgCSI[1:3,4])
-            totalSR = np.sum(self.avgCSI[1:3,5])/np.sum(self.avgCSI[1:3,6])
+            totalPOD = np.sum(self.avgCSI[1:,3])/np.sum(self.avgCSI[1:,4])
+            totalSR = np.sum(self.avgCSI[1:,5])/np.sum(self.avgCSI[1:,6])
             totalCSI =  1/(1/totalPOD + 1/totalSR - 1)
         else:
             print("DWD Labels has no stationary front, so we do not include them here!")
@@ -106,18 +128,25 @@ class CSIEvaluator():
         print("Global Count in label is \n{}".format(self.avgCSI[:, 4]))
         print("Global Count in prediction is \n{}".format(self.avgCSI[:, 6]))
 
-        filename = os.path.join(name, "{}_{}_maxDist_{}.txt".format("global" if self.globalCSI else "local", "NWS" if self.NWS else "DWD", self.maxDist))
-        if(not os.path.isdir(name)):
-            os.mkdir(name)
+        filename = os.path.join(self.outname, "{}_{}_maxDist_{}.txt".format("global" if self.globalCSI else "local", "NWS" if self.NWS else "DWD", self.maxDist))
         with open(filename, "w") as f:    
-            print("global", self.globalCSI, "NWS Region", self.NWS, "maxDist", self.maxDist, file = f)
+            print("{} {} Region maxDist {}".format("global" if self.globalCSI else "local", "NWS" if self.NWS else "DWD", self.maxDist), file = f)
             print("Global CSI is \n{}".format(globalErr), file = f)
             print("Total CSI is \n{}".format(totalErr), file = f)
+            print("Global Count in label is \n{}".format(self.avgCSI[:, 4]), file = f)
+            print("Global Count in prediction is \n{}".format(self.avgCSI[:, 6]), file = f)
+            print("in-data degree {}°N, {}°E".format( self.inlats, self.inlons), file = f)
+            print("tgt-data degree {}°N, {}°E".format( self.tgtlats, self.tgtlons), file = f)
+            print("ev-data degree {}°N, {}°E".format( self.evlats, self.evlons), file = f)
+            print("borders pixel (N {},  S {}, W {},E {}) ".format(self.northBorder, self.southBorder, self.westBorder, self.eastBorder), file =f)
+            print("offsets degree (NW {})".format(self.offset), file=f)
+            print("evcrop pixel (NW {}) ".format(self.evCrop), file=f)
+
         print("global", self.globalCSI, "NWS Region", self.NWS, "maxDist", self.maxDist)
         print("Global CSI is \n{}".format(globalErr))
         print("Total CSI is \n{}".format(totalErr))
     
-    def getCriticalSuccessInKM(self, image, prediction, res = (-0.25, 0.25), offset = (0,0), maxDist = 100):
+    def getCriticalSuccessInKM(self, image, prediction, res = (-0.25, 0.25), offset = (0,0), maxDist = 100, evCrop =(0,0)):
         offarray = np.array([offset[0]/np.abs(res[0]), offset[1]/res[1]])
         evarray = np.array([evCrop[0], evCrop[1]])
 
@@ -129,7 +158,7 @@ class CSIEvaluator():
         #predLabel = measure.label(mypred, background = 0)*mythinpred[evCrop[0]:-evCrop[0], evCrop[1]:-evCrop[1]]
         
         mypredComp = morphology.binary_dilation(prediction[0,:,:]>0, selem = np.ones((3,3)))
-        predLabelComp = measure.label(mypred, background = 0)*mythinpred
+        predLabelComp = measure.label(mypredComp, background = 0)*mythinpred
         mypred = mypredComp[evCrop[0]:-evCrop[0], evCrop[1]:-evCrop[1]]
         predLabel = predLabelComp[evCrop[0]:-evCrop[0], evCrop[1]:-evCrop[1]]
 
@@ -137,7 +166,7 @@ class CSIEvaluator():
         #imageLabel = measure.label(myimg, background = 0)*mythinimg[evCrop[0]:-evCrop[0], evCrop[1]:-evCrop[1]]
         
         myimgComp = morphology.binary_dilation(image[0,:,:]>0, selem = np.ones((3,3)))
-        imageLabelComp = measure.label(myimg, background = 0)*mythinimg
+        imageLabelComp = measure.label(myimgComp, background = 0)*mythinimg
         myimg = myimgComp[evCrop[0]:-evCrop[0], evCrop[1]:-evCrop[1]]
         imageLabel = imageLabelComp[evCrop[0]:-evCrop[0], evCrop[1]:-evCrop[1]]
         
@@ -151,10 +180,10 @@ class CSIEvaluator():
         numValidPredLabelsComp = np.max(predLabelComp)
         numValidImageLabelsComp = np.max(imageLabelComp)
 
-        SR = 1000*np.ones((numValidPredLabels, numValidImageLabels))
-        POD = 1000*np.ones((numValidImageLabels, numValidPredLabels))
+        SR = 1000*np.ones((numValidPredLabels, numValidImageLabelsComp))
+        POD = 1000*np.ones((numValidImageLabels, numValidPredLabelsComp))
 
-        print("This does not work for evCRop > 0 ")
+        tidx = 0
         # evaluate all detected label in evaluation range against all WS-label in search range
         for pidx in range(1,numValidPredLabelsComp+1):
             onlyPredLabel = (predLabel == pidx)*(2*maxDist)
@@ -165,30 +194,35 @@ class CSIEvaluator():
                 continue
             # the label is (partially) within the evaluation region => evaluate it
             else:
-                tidx+=1
+                tidx += 1
 
             labelPointsArr = np.array(labelPoints).transpose()+offarray+evarray
             for iidx in range(1,numValidImageLabelsComp+1):
                 onlyImageLabel = (imageLabelComp == iidx)*(2*maxDist)
                 # comparison points
                 imagePointsComp = np.nonzero(onlyImageLabel)
-                imagePointsArrComp = np.array(imagePoints).transpose()+offarray
+                imagePointsArrComp = np.array(imagePointsComp).transpose()+offarray
                 if(len(imagePointsArrComp)>0):
                     # for each predicted point get the minimum distance in km to the label
                     for p in range(len(labelPoints[0])):
                         onlyPredLabel[labelPoints[0][p],labelPoints[1][p]] = self.getDistanceOnEarth(labelPointsArr[p:p+1], imagePointsArrComp, res)
                 medianDistance = np.median((onlyPredLabel)[labelPoints])
-                SR[pidx-1, iidx-1] = min(SR[pidx-1, iidx-1], medianDistance)
+                SR[tidx-1, iidx-1] = min(SR[tidx-1, iidx-1], medianDistance)
         # evaluate all WS label in evaluation range against all detected label in search range
         for pidx in range(1,numValidPredLabelsComp+1):
             onlyPredLabel = (predLabelComp == pidx)*(2*maxDist)
             #comparison points
             labelPointsComp = np.nonzero(onlyPredLabel)
-            labelPointsArrComp = np.array(labelPoints).transpose()+offarray
+            labelPointsArrComp = np.array(labelPointsComp).transpose()+offarray
+            tidx = 0
             for iidx in range(1,numValidImageLabelsComp+1):
                 onlyImageLabel = (imageLabel == iidx)*(2*maxDist)
                 # comparison points
                 imagePoints = np.nonzero(onlyImageLabel)
+                if(len(imagePoints[0]) == 0):
+                    continue
+                else:
+                    tidx += 1
                 imagePointsArr = np.array(imagePoints).transpose()+offarray+evarray
                 if(len(labelPointsArrComp)>0):
                     # for each predicted point get the minimum distance in km to the label
@@ -196,7 +230,7 @@ class CSIEvaluator():
                         onlyImageLabel[imagePoints[0][p],imagePoints[1][p]] = self.getDistanceOnEarth(imagePointsArr[p:p+1], labelPointsArrComp, res)
 
                 medianDistance = np.median((onlyImageLabel)[imagePoints])
-                POD[iidx-1, pidx-1] = min(POD[iidx-1, pidx-1], medianDistance)
+                POD[tidx-1, pidx-1] = min(POD[tidx-1, pidx-1], medianDistance)
         if(numPredLabels == 0 and numImageLabels == 0):
             return np.array([0,0,0, 0, 0, 0 ,0])
         elif(numPredLabels == 0 and numImageLabels != 0):
@@ -346,13 +380,23 @@ class CSIEvaluator():
 
 
 class ClimatologyEvaluator():
-    def __init__(self, args):
-        latRes = 360 if args.halfRes or args.ETH else 720
-        lonRes = 720 if args.halfRes or args.ETH else 1440
-
+    def __init__(self, outpath, run_name, latRes, lonRes, classes, ETH):
         self.ETH = args.ETH
-        self.totalImage = torch.zeros((latRes, lonRes, args.classes))
-        self.args = args
+        self.totalImage = torch.zeros((latRes, lonRes, classes))
+        outfolder = os.path.join(outpath, "Climatologies")
+        if(not os.path.isdir(outpath)):
+            print("Could not find Output-Path, abort execution")
+            print("Path was: {}".format(outpath))
+            exit(1)
+        if(not os.path.isdir(outfolder)):
+            print("Creating Detection Folder at Output-Path")
+            os.mkdir(outfolder)
+        outname = os.path.join(outfolder, run_name)
+        if(not os.path.isdir(outname)):
+            print("Creating Folder {} to store results".format(run_name))
+            os.mkdir(outname)
+        self.outname = outname
+        self.no = no
     def evaluate(self, label, fronts, filename):
         if(not self.ETH):
             # decrease the resolution
@@ -362,29 +406,36 @@ class ClimatologyEvaluator():
         self.totalImage += fronts[0]
 
     def finish(self):
-        name = os.path.join("Climatologies",self.args.outname)
-        if(not os.path.isdir(name)):
-            os.mkdir(name)
         
         self.totalImage = self.totalImage.cpu().numpy()
         typeToString = ["front", "warm","cold", "occ","stnry"]
         for frontalType in range(self.totalImage.shape[-1]):
-            self.saveClimatology(self.totalImage[:,:,frontalType], num_samples, name, typeToString[frontalType])
+            self.saveClimatology(self.totalImage[:,:,frontalType], num_samples, self.outname, typeToString[frontalType])
     
-    def saveClimatology(self, climatology, num_samples, name, typen):
-        imsave(name+"/"+typen+"climatology.png", climatology/(num_samples))
-        imsave(name+"/"+typen+"climatology_unnormalized.png", climatology)
+    def saveClimatology(self, climatology, num_samples, outfold, typen):
+        imsave(os.path.join(outfold, typen+"climatology.png", climatology/(num_samples)))
+        imsave(os.path.join(outfold, typen+"climatology_unnormalized.png", climatology))
         climatology = climatology.astype(np.float32)
-        climatology.tofile(name+"/"+typen+"climatology.bin")
+        climatology.tofile(os.path.join(outfold, typen+"climatology.bin"))
 
 class DrawImageEvaluator():
-    def __init__(self, args):
-        self.outname = args.outname
+    def __init__(self, outpath, run_name, no):
+        outfolder = os.path.join(outpath, "OutputImages")
+        if(not os.path.isdir(outpath)):
+            print("Could not find Output-Path, abort execution")
+            print("Path was: {}".format(outpath))
+            exit(1)
+        if(not os.path.isdir(outfolder)):
+            print("Creating Detection Folder at Output-Path")
+            os.mkdir(outfolder)
+        outname = os.path.join(outfolder, run_name)
+        if(not os.path.isdir(outname)):
+            print("Creating Folder {} to store results".format(run_name))
+            os.mkdir(outname)
+        self.outname = outname
+        self.no = no
     def evaluate(self, label, fronts, name):
-        outfold = os.path.join("OutputImages", self.outname)
-        if(not os.path.isdir(outfold)):
-            os.mkdir(outfold)
-        filename = os.path.splitext(name[0])[0]
+        filename = os.path.splitext(name[0][self.no:])[0]
         # save the label
         # switch channels for usual output colors
         outlabel = torch.zeros_like(label)
@@ -398,7 +449,7 @@ class DrawImageEvaluator():
         outlabel[0,:,:,0] = (outlabel[0,:,:,0]<=label[0,:,:,2])*label[0,:,:,2] + (outlabel[0,:,:,0] > label[0,:,:,2])*outlabel[0,:,:,0]
         outlabel[0,:,:,2] = (outlabel[0,:,:,2]<=label[0,:,:,2])*label[0,:,:,2] + (outlabel[0,:,:,2] > label[0,:,:,2])*outlabel[0,:,:,2]
 
-        imsave(os.path.join(outfold, filename+"_label.png"), (outlabel.cpu().numpy()[0,20:-20,20:-20,:-1]*255).astype(np.uint8))
+        imsave(os.path.join(self.outname, filename+"_label.png"), (outlabel.cpu().numpy()[0,20:-20,20:-20,:-1]*255).astype(np.uint8))
         # save the prediction
         #switch channels for usual output colors
         outpred = torch.zeros_like(label)
@@ -413,70 +464,79 @@ class DrawImageEvaluator():
 
         outpred[0,:,:,2] = (outpred[0,:,:,2]<=fronts[0,:,:,3])*fronts[0,:,:,3] + (outpred[0,:,:,2] > fronts[0,:,:,3])*outpred[0,:,:,2]
 
-        imsave(os.path.join(outfold, filename+"_prediction.png"), (outpred.cpu().numpy()[0,20:-20,20:-20,:-1]*255).astype(np.uint8))
+        imsave(os.path.join(self.outname, filename+"_prediction.png"), (outpred.cpu().numpy()[0,20:-20,20:-20,:-1]*255).astype(np.uint8))
         
         outdiff = torch.zeros((label.shape[1], label.shape[2], 3))
         outdiff[:,:,0] = torch.sum(label[0,:,:,:], dim = -1).cpu()
         outdiff[:,:,1] = fronts[0,:,:,0].cpu()
-        imsave(os.path.join(outfold, filename+"_diff.png"), (outdiff[20:-20,20:-20].numpy()*255).astype(np.uint8))
+        imsave(os.path.join(self.outname, filename+"_diff.png"), (outdiff[20:-20,20:-20].numpy()*255).astype(np.uint8))
 
 
     def finish(self):
         print("Done") 
 
-class DistributedOptions():
-    def __init__(self):
-        self.myRank = -1
-        self.device = -1
-        self.local_rank = -1
-        self.world_size = -1
-        self.nproc_per_node = -1
-        self.nnodes = -1
-        self.node_rank = -1
+class WriteOutEvaluator():
+    def __init__(self, outpath, run_name, no):
+        outfolder = os.path.join(outpath, "Detections")
+        if(not os.path.isdir(outpath)):
+            print("Could not find Output-Path, abort execution")
+            print("Path was: {}".format(outpath))
+            exit(1)
+        if(not os.path.isdir(outfolder)):
+            print("Creating Detection Folder at Output-Path")
+            os.mkdir(outfolder)
+        outname = os.path.join(outfolder, run_name)
+        if(not os.path.isdir(outname)):
+            print("Creating Folder {} to store results".format(run_name))
+            os.mkdir(outname)
+        self.outname = outname
+        self.no = no
+    def evaluate(self, _, fronts, filename):
+        myname = os.path.splitext(name[0][self.no:])[0]
+        fronts.numpy().tofile(os.path.join(self.outname,myname+".bin"))
+    def finish(self):
+        print("Done")
 
 def parseArguments():
     parser = argparse.ArgumentParser(description='FrontNet')
-    parser.add_argument('--net', help='path no net')
+    # General Information
     parser.add_argument('--data', help='path to folder containing data')
     parser.add_argument('--label', type = str, default = None, help='path to folder containing label')
+    parser.add_argument('--outpath', default = ".", help='path to where the output shall be written')
     parser.add_argument('--outname', help='name of the output')
+
+    # Device Information
     parser.add_argument('--disable-cuda', action='store_true', help='Disable CUDA')
     parser.add_argument('--device', type = int, default = 0, help = "number of device to use")
+    
+    # data set information
     parser.add_argument('--fullsize', action='store_true', help='test the network at the global scope')
     parser.add_argument('--NWS', action = 'store_true', help='use Resolution of hires')
     parser.add_argument('--num_samples', type = int, default = -1, help='number of samples to infere from the dataset')
-    parser.add_argument('--classes', type = int, default = 1, help = 'How many classes the network should predict (binary case has 1 class denoted by probabilities)')
-    parser.add_argument('--distance', action = 'store_true', help = 'Learn Distance Fields instead of lines')
-    parser.add_argument('--normType', type = int, default = 0, help = 'How to normalize the data: 0 min-max, 1 mean-var, 2/3 the same but per pixel')
-    parser.add_argument('--labelGroupingList', type = str, default = None, help = 'Comma separated list of label groups \n possible fields are w c o s (warm, cold, occluson, stationary)')
-    parser.add_argument('--ETH', action = 'store_true', help = 'Compare against an ETH result instead of net')
-    parser.add_argument('--show-error', action = 'store_true', help = 'show the inividual error values during inference')
-    parser.add_argument('--fromFile', type = str, default = None, help = 'show the inividual error values during inference')
-    parser.add_argument('--drawImages', action = 'store_true', help = 'draw results of each iteration')
-    parser.add_argument('--elastic', action = 'store_true', help = 'use elastic fit loss')
-    parser.add_argument('--CSI', action = 'store_true')
-    parser.add_argument('--preCalc', action = 'store_true')
-    parser.add_argument('--deeplab', action = 'store_true')
-    parser.add_argument('--maxDist', type = int, default = 250, help = 'maxDist for CSI in km')
-    parser.add_argument('--globalCSI', action='store_true', default = False, help = 'calculate CSI by matching each front against the whole set of predictions. Else each front is only matched against another front. ')
     parser.add_argument('--halfRes', action='store_true', help = 'evaluate on half resolution of ERA5')
     parser.add_argument('--border', type = int, default = 5, help = "A Border in degree which is not evaluated")
-    parser.add_argument('--climatology', action='store_true', default = False, help = 'Create a Climatology instead of CSI calculation')
+    parser.add_argument('--labelGroupingList', type = str, default = None, help = 'Comma separated list of label groups \n possible fields are w c o s (warm, cold, occluson, stationary)')
+    
+    # inference information
+    parser.add_argument('--ETH', action = 'store_true', help = 'Compare against an ETH result instead of net')
+    parser.add_argument('--preCalc', action = 'store_true')
+
+    # network information
+    parser.add_argument('--net', help='path no net')
+    parser.add_argument('--classes', type = int, default = 1, help = 'How many classes the network should predict (binary case has 1 class denoted by probabilities)')
+    parser.add_argument('--fromFile', type = str, default = None, help = 'show the inividual error values during inference')
+    
+    # evaluation information
+    parser.add_argument('--CSI', action = 'store_true', help = 'evaluate the CSI')
+    parser.add_argument('--maxDist', type = int, default = 250, help = 'maxDist for CSI in km')
+    parser.add_argument('--globalCSI', action='store_true', default = False, help = 'calculate CSI by matching each front against the whole set of predictions. Else each front is only matched against another front. ')
+    parser.add_argument('--drawImages', action = 'store_true', help = 'draw results of each iteration')
+    parser.add_argument('--climatology', action='store_true', default = False, help = 'Create a Climatology')
+    parser.add_argument('--writeOut', action='store_true', default = False, help = 'Write all Results to File')
     args = parser.parse_args()
-    args.binary = args.classes == 1
     
     return args
 
-def setupDevice(args):
-    parOpt = DistributedOptions()
-    parOpt.myRank = 0
-    if not args.disable_cuda and torch.cuda.is_available():
-        torch.cuda.set_device(args.device)
-        parOpt.device = torch.device('cuda')
-    else:
-        parOpt.device = torch.device('cpu')
-    return parOpt
-    
 def setupDataset(args):
     data_fold = args.data
     label_fold = args.label
@@ -505,16 +565,12 @@ def setupDataset(args):
     # Comparison against ETH only uses midlatitudes
     elif(args.halfRes and not args.fullsize):
         cropsize = (56*4,110*4)
-        mapTypes = {"NA": ("NA", (76,20.25), (-60,50), (-stepsize, stepsize), None)}
+        mapTypes = {"NA": ("NA", (66+10,30.25-10), (-50-10,40+10), (-stepsize, stepsize), None)}
         if(args.NWS):
             cropsize = (56*4, 106*4) 
-            mapTypes = {"hires": ("hires", (76, 20.25), (-151, -45), (-stepsize,stepsize), None) }
+            mapTypes = {"hires": ("hires", (66+10, 30.25-10), (-141-10, -55+10), (-stepsize,stepsize), None) }
 
-    # ETH uses half Res before
-    if(args.ETH):
-        cropsize=(cropsize[0]//2,cropsize[1]//2)
     
-    myLevelRange = np.arange(105,138,4)
 
     myTransform = (None, None)
     labelThickness = 1
@@ -522,13 +578,12 @@ def setupDataset(args):
 
     labelGroupingList = args.labelGroupingList
     myLineGenerator = extractStackedPolyLinesInRangeAsSignedDistance(labelGroupingList, labelThickness, labelTrans)
-    if(args.elastic):
-        myLineGenerator = extractCoordsInRange(labelGroupingList)
     myLabelExtractor = DefaultFrontLabelExtractor(myLineGenerator)
 
+    # overwritten if from file is given
     variables = ['t','q','u','v','w','sp','kmPerLon']
-
-    normType = args.normType
+    normType = 0
+    myLevelRange = np.arange(105,138,4)
 
     if(not args.fromFile is None):
         info = getDataSetInformationFromInfo(args.fromFile)
@@ -539,67 +594,26 @@ def setupDataset(args):
         print(variables, normType, myLevelRange)
 
     
-
     myEraExtractor = DerivativeFlippingAwareEraExtractor(variables, [], [], 0.0, 0 , 1, normType = normType, sharedObj = None)
+    subfolds = (True, False)
+    remPref = 3
+    halfResEval = args.halfRes
     if(ETH):
         myEraExtractor = ETHEraExtractor()
+        subfolds = (False, False)
+        remPref = 1
+        halfResEval = False
+        # ETH uses half Res as input. Network subsamples during evaluation
+        cropsize=(cropsize[0]//2,cropsize[1]//2)
+
     if(args.preCalc):
         myEraExtractor = BinaryResultExtractor()
+        subfolds = (False, False)
+        remPref = 0
+
     # Create Dataset
-    data_set = WeatherFrontDataset(data_dir=data_fold, label_dir=label_fold, mapTypes = mapTypes, levelRange = myLevelRange, transform=myTransform, outSize=cropsize, labelThickness= labelThickness, label_extractor = myLabelExtractor, era_extractor = myEraExtractor, asCoords = args.elastic, has_subfolds = (not (args.ETH or args.preCalc),False), removePrefix = 1+(not args.ETH)*2-3*(args.preCalc), halfResEval = args.halfRes and (not args.ETH))
+    data_set = WeatherFrontDataset(data_dir=data_fold, label_dir=label_fold, mapTypes = mapTypes, levelRange = myLevelRange, transform=myTransform, outSize=cropsize, labelThickness= labelThickness, label_extractor = myLabelExtractor, era_extractor = myEraExtractor, asCoords = False, has_subfolds = subfolds, removePrefix = remPref, halfResEval = halfResEval)
     return data_set
-
-def setupDataLoader(data_set, args):
-    # Create DataLoader 
-    sampler = SequentialSampler(data_set)
-    numWorkers = 0
-    if(args.ETH):
-        numWorkers = 0
-    loader = DataLoader(data_set, shuffle=False, 
-    batch_size = 1, sampler = sampler, pin_memory = True, 
-    collate_fn = collate_wrapper(args.stacked, args.elastic, 0), num_workers = numWorkers)
-    return loader
-
-def inferResults(model, inputs, args):
-    if(args.ETH):
-        outputs = inputs.permute(0,2,3,1)
-        smoutputs = inputs.permute(0,2,3,1)
-    elif(args.preCalc):
-        outputs = inputs*1
-        smoutputs = inputs*1
-        labelsToUse = args.labelGroupingList.split(",")
-        possLabels = ["w","c","o","s"]
-        for idx, possLab in enumerate(possLabels, 1):
-            isIn = False
-            for labelGroup in labelsToUse:
-                if(possLab in labelGroup):
-                    isIn = True
-            if(not isIn):
-                smoutputs[0,:,:,0] -= smoutputs[0,:,:,idx]
-    else:
-        outputs = model(inputs)
-        if(args.deeplab):
-            outputs = outputs["out"]
-        outputs = outputs.permute(0,2,3,1)
-        smoutputs = torch.softmax(outputs.data, dim = -1)
-        smoutputs[0,:,:,0] = 1-smoutputs[0,:,:,0]
-
-        # If some labels are not to be considered additionally remove them from the 0 case (all others don't matter)
-        labelsToUse = args.labelGroupingList.split(",")
-        possLabels = ["w","c","o","s"]
-        for idx, possLab in enumerate(possLabels, 1):
-            isIn = False
-            for labelGroup in labelsToUse:
-                if(possLab in labelGroup):
-                    isIn = True
-            if(not isIn):
-                smoutputs[0,:,:,0] -= smoutputs[0,:,:,idx]
-        if(True or (args.climatology or args.drawImages)):
-            smoutputs = filterFronts(smoutputs.cpu().numpy(), args.border*4)
-        else:
-            # CSI may use an additional crop, due to input size restrictions! 
-            smoutputs = filterFrontsFreeBorder(smoutputs.cpu().numpy(), (args.border+1)*4, args.border*4, (args.border+1)*4, (args.border+0)*4)
-    return outputs, smoutputs
 
 def performInference(model, loader, num_samples, evaluator, parOpt, args):
     for idx, data in enumerate(tqdm(loader, desc ='eval'), 0):
@@ -608,64 +622,40 @@ def performInference(model, loader, num_samples, evaluator, parOpt, args):
         inputs, labels, filename = data
         inputs = inputs.to(device = parOpt.device, non_blocking=False)
         # Create Results
-        outputs, smoutputs = inferResults(model, inputs, args)
-        if(args.climatology):
-            if(args.ETH):
-                # ETH does no additional filtering of the results
-                evaluator.evaluate(None, smoutputs.cpu(), filename)
-            else:
-                # The net does perform some filterin steps first
-                evaluator.evaluate(None, torch.from_numpy(smoutputs), filename)
+        if(args.ETH):
+            smoutputs = inputs.permute(0,2,3,1)
+        elif(args.preCalc):
+            smoutputs = inputs*1
+            smoutputs = filterChannels(smoutputs, args)
         else:
-            if(not args.elastic):
-                labels = labels.to(device = parOpt.device, non_blocking=False)
+            # network detection + softmax + channelFiltering and Boolean transformation
+            smoutputs = inferResults(model, inputs, args)
+        
+        # no labels necessary
+        if(args.climatology or args.writeOut):
+            evaluator.evaluate(None, smoutputs.cpu(), filename)
+        # labels are necessary
+        else:
             pixPerDeg = 2 if args.halfRes else 4
-            if(True or (args.climatology or args.drawImages)):
-                labels = filterFronts(labels.cpu().numpy(), args.border*pixPerDeg)
-            else:
-                labels = filterFrontsFreeBorder(labels.cpu().numpy(), (args.border+1)*4, args.border*4, (args.border+1)*4, (args.border+0)*4)
-            if(args.ETH):
-                evaluator.evaluate(torch.from_numpy(labels), smoutputs.cpu(), filename)
-            elif(args.preCalc):
-                evaluator.evaluate(torch.from_numpy(labels), smoutputs.cpu(), filename)
-            else:
-                evaluator.evaluate(torch.from_numpy(labels), torch.from_numpy(smoutputs), filename)
+            labels = filterFronts(labels.cpu().numpy(), args.border*pixPerDeg)
+            evaluator.evaluate(torch.from_numpy(labels).cpu(), smoutputs.cpu(), filename)
     evaluator.finish()
-
-def setupModel(args, parOpt):
-    model = None
-    if(not (args.ETH or args.preCalc)):
-        embeddingFactor = 6
-        SubBlocks = (3,3,3)
-        kernel_size = 5
-        model = FDU2DNetLargeEmbedCombineModular(in_channel = args.in_channels, out_channel = args.out_channels, kernel_size = kernel_size, sub_blocks = SubBlocks, embedding_factor = embeddingFactor).to(parOpt.device)
-        model.load_state_dict(torch.load(args.net, map_location = parOpt.device))
-        model = model.eval()
-        if(parOpt.myRank == 0):
-            print()
-            print("Begin Evaluation of Data...")
-            print("Network:", model)
-    return model
-
 
 if __name__ == "__main__":
     
     args = parseArguments()
     parOpt = setupDevice(args)
 
-    name = os.path.join("Predictions",args.outname)
-    
     ETH = args.ETH
 
     args.stacked = True
     data_set = setupDataset(args)    
-    loader = setupDataLoader(data_set, args)
+    num_worker = 0 if (args.ETH or args.preCalc) else 8
+    loader = setupDataLoader(data_set, num_worker)
     
-
     sample_data = data_set[0]
     data_dims = sample_data[0].shape
     print(data_dims)
-    #label_dims = sample_data[1].shape
 
 
     # Data information
@@ -675,8 +665,6 @@ if __name__ == "__main__":
     lonRes = data_dims[2]
     
     out_channels = args.classes
-    if(args.binary):
-        out_channels = 1
     args.in_channels = in_channels
     args.out_channels = out_channels
 
@@ -694,7 +682,10 @@ if __name__ == "__main__":
         print("levels:", levels)
         print("Labeltypes:", out_channels)
         print("")
-    model = setupModel(args, parOpt)
+    model = None
+    # we only need a model, when we need to infer on the fly
+    if(not (args.ETH or args.preCalc)):
+        model = setupModel(args, parOpt)
     
     evMapType = "hires" if args.NWS else "NA"
     info = data_set.mapTypes[evMapType]
@@ -706,15 +697,22 @@ if __name__ == "__main__":
     evlats = np.array((tgtlats[0]-evdiff , tgtlats[1]+evdiff))
     evlons = np.array((tgtlons[0]+evdiff , tgtlons[1]-evdiff))
 
-
+    evaluator = None
     # Basic: CSI Evaluation
-    evaluator = CSIEvaluator(args, inlats, inlons, tgtlats, tgtlons, evlats, evlons)
+    if(args.CSI):
+        evaluator = CSIEvaluator(args.outpath, args.outname, args, inlats, inlons, tgtlats, tgtlons, evlats, evlons)
     # Alternative: Create A climatology of a year
     if(args.climatology):
-        evaluator = ClimatologyEvaluator(args)
+        outLatRes = 360 if args.halfRes or args.ETH else 720
+        outLonRes = 720 if args.halfRes or args.ETH else 1440
+        evaluator = ClimatologyEvaluator(args.outpath, args.outname, outLatRes, outLonRes, args.classes, ETH)
     if(args.drawImages):
-        evaluator = DrawImageEvaluator(args)
-
+        evaluator = DrawImageEvaluator(args.outpath, args.outname, data_set.removePrefix)
+    if(args.writeOut):
+        evaluator = WriteOutEvaluator(args.outpath, args.outname, data_set.removePrefix)
+    if(evaluator is None):
+        print("No evaluation method specified, exiting")
+        exit(1)
     num_samples = len(loader)
     if(args.num_samples != -1):
         num_samples = args.num_samples

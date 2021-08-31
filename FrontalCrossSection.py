@@ -464,7 +464,7 @@ def performInference(model, loader, num_samples, parOpt, args):
             var = torch.from_numpy(q)
             rootgrp.close()
         elif(args.calcVar == "rq_z" or args.calcVar == "drq_z"):
-            grad = args.calcVar == "dq_z"
+            grad = args.calcVar == "drq_z"
             var = inputs[0,9*8+8]
             newFile = "/lustre/project/m2_jgu-w2w/ipaserver/ERA5/{0}/{1}/Z{0}{1}{2}_{3}.nc".format(year,month,day,hour)
             rootgrp = netCDF4.Dataset(os.path.realpath(newFile), "r", format="NETCDF4", parallel=False)
