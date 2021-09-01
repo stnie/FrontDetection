@@ -491,7 +491,7 @@ class WriteOutEvaluator():
             os.mkdir(outname)
         self.outname = outname
         self.no = no
-    def evaluate(self, _, fronts, filename):
+    def evaluate(self, _, fronts, name):
         myname = os.path.splitext(name[0][self.no:])[0]
         fronts.numpy().tofile(os.path.join(self.outname,myname+".bin"))
     def finish(self):
