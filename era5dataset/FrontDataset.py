@@ -28,8 +28,8 @@ class WeatherFrontDataset(Dataset):
         Args:
             data_dir (string):      Directory with all the images.
             label_dir (string):     Directory with all the labls (fronts)
-            validLats (int,int):    Lowest and Highest Latitude (-90 to 90) from wich the data shall be sampled
-            validLons (int,int):    Lowest and Highest Longitude (0 to 360-resolution[1]) from wich the data shall be sampled
+            validLats (int,int):    Lowest and Highest Latitude (90 to -(90-resolution[0])) from wich the data shall be sampled
+            validLons (int,int):    Lowest and Highest Longitude (-180 to 180) from wich the data shall be sampled
             resolution (float, float): Step Resolution in Latitudinal and Longitudinal direction
             transform (callable, optional): Optional transform to be applied on a sample.
         """

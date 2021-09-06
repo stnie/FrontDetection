@@ -46,9 +46,18 @@ class CSIEvaluator():
             self.res = (-0.25, 0.25)
 
         self.northBorder = int((inlats[0]-tgtlats[0])*pixPerDeg)
-        self.southBorder = int((tgtlats[1]-inlats[1])*pixPerDeg)
-        self.eastBorder = int((inlons[1]-tgtlons[1])*pixPerDeg)
+        # negative values as they describe the border from the end of the array in their respective direction
+        self.southBorder = -int((tgtlats[1]-inlats[1])*pixPerDeg)
+        self.eastBorder = -int((inlons[1]-tgtlons[1])*pixPerDeg)
         self.westBorder = int((tgtlons[0]-inlons[0])*pixPerDeg)
+        if(self.northBorder == 0):
+            self.northBorder = None
+        if(self.southBorder == 0):
+            self.southBorder = None
+        if(self.eastBorder == 0):
+            self.eastBorder = None
+        if(self.westBorder == 0):
+            self.westBorder = None
         northOff = int(90-tgtlats[0])
         westOff = int(tgtlons[0]+180)
         self.offset = (northOff , westOff)
@@ -95,8 +104,8 @@ class CSIEvaluator():
             #labels = labels.permute(0,2,3,1)
         
         # extract the desired region
-        predictions = predictions[:, self.northBorder:-self.southBorder,self.westBorder:-self.eastBorder].numpy()
-        labels = labels[:, self.northBorder:-self.southBorder,self.westBorder:-self.eastBorder].numpy()
+        predictions = predictions[:, self.northBorder:self.southBorder,self.westBorder:self.eastBorder].numpy()
+        labels = labels[:, self.northBorder:self.southBorder,self.westBorder:self.eastBorder].numpy()
         # evaluate
         if(self.globalCSI):
             self.avgCSI[0] += self.getCriticalSuccessAgainstWholeInKM(np.sum(labels, axis=-1), predictions[:,:,:,0], self.res, self.offset, self.maxDist, self.evCrop)
@@ -491,8 +500,8 @@ class WriteOutEvaluator():
             os.mkdir(outname)
         self.outname = outname
         self.no = no
-    def evaluate(self, _, fronts, name):
-        myname = os.path.splitext(name[0][self.no:])[0]
+    def evaluate(self, _, fronts, filename):
+        myname = os.path.splitext(filename[0][self.no:])[0]
         fronts.numpy().tofile(os.path.join(self.outname,myname+".bin"))
     def finish(self):
         print("Done")
@@ -626,9 +635,9 @@ def performInference(model, loader, num_samples, evaluator, parOpt, args):
             smoutputs = inputs.permute(0,2,3,1)
         elif(args.preCalc):
             smoutputs = inputs*1
-            smoutputs = filterChannels(smoutputs, args)
+            #smoutputs = filterChannels(smoutputs, args)
         else:
-            # network detection + softmax + channelFiltering and Boolean transformation
+            # network detection + softmax + channelFiltering and Boolean transformation (datatype remains float32!)
             smoutputs = inferResults(model, inputs, args)
         
         # no labels necessary
@@ -696,6 +705,11 @@ if __name__ == "__main__":
     evdiff = 10
     evlats = np.array((tgtlats[0]-evdiff , tgtlats[1]+evdiff))
     evlons = np.array((tgtlons[0]+evdiff , tgtlons[1]-evdiff))
+    if(args.preCalc):
+        evlats = np.array((70 , 35.25)) if (not args.halfRes) else np.array((60,35.25))
+        evlons = np.array((-135 , -60)) if args.NWS else np.array((-45, 35))
+        tgtlats = np.array((evlats[0]+evdiff , evlats[1]-evdiff))
+        tgtlons = np.array((evlons[0]-evdiff , evlons[1]+evdiff))
 
     evaluator = None
     # Basic: CSI Evaluation
