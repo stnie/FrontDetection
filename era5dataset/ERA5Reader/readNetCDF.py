@@ -904,8 +904,6 @@ def getValueRanges(variable):
         minval, maxval = -90, 90
     elif(variable == 'longitude'):
         minval, maxval = -180, 180
-    elif(variable == 'tp'):
-        minval, maxval = 0, 0.05
     return minval,maxval
 
 

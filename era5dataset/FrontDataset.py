@@ -116,8 +116,6 @@ class WeatherFrontDataset(Dataset):
             for filen in os.listdir(self.data_dir):
                 if("B20" in filen):
                     continue
-                #if(self.removePrefix == 0 and not ( "_00" in filen or "_06" in filen or "_12" in filen or "_18" in filen)):
-                #    continue
                 if(self.has_label):
                     potLabel = datanameToLabelname(filen, self.mapTypes, self.removePrefix)
                     labelExists = False
