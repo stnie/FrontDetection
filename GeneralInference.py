@@ -287,9 +287,9 @@ class CSIEvaluator():
             myimg = myimgComp[evCrop[0]:-evCrop[0], evCrop[1]:-evCrop[1]]
             imageLabel = imageLabelComp[evCrop[0]:-evCrop[0], evCrop[1]:-evCrop[1]]
         else:
-            myimg = morphology.binary_dilation(image[0,:,:]>0, selem = np.ones((3,3)))
-            imageLabel = measure.label(myimgComp, background = 0)*mythinimg
             myimgComp = morphology.binary_dilation(image[0,:,:]>0, selem = np.ones((3,3)))
+            imageLabel = measure.label(myimgComp, background = 0)*mythinimg
+            myimg = morphology.binary_dilation(image[0,:,:]>0, selem = np.ones((3,3)))
             imageLabelComp = measure.label(myimg, background = 0)*mythinimg
 
         #numPredLabels = np.max(predLabel)#[evCrop[0]:-evCrop[0], evCrop[1]:-evCrop[1]])
@@ -393,7 +393,7 @@ class CSIEvaluator():
 
 class ClimatologyEvaluator():
     def __init__(self, outpath, run_name, latRes, lonRes, classes, ETH):
-        self.ETH = args.ETH
+        self.ETH = ETH
         self.totalImage = torch.zeros((latRes, lonRes, classes))
         outfolder = os.path.join(outpath, "Climatologies")
         if(not os.path.isdir(outpath)):
@@ -408,7 +408,6 @@ class ClimatologyEvaluator():
             print("Creating Folder {} to store results".format(run_name))
             os.mkdir(outname)
         self.outname = outname
-        self.no = no
     def evaluate(self, label, fronts, filename):
         if(not self.ETH):
             # decrease the resolution
