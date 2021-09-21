@@ -24,8 +24,11 @@ from IOModules.csbReader import *
 
 from NetInfoImport import *
 
+from era5dataset.ERA5Reader.readNetCDF import getMeanVar, getValueRanges
+
 from FrontPostProcessing import filterFronts, filterFrontsFreeBorder
 from InferOutputs import setupModel, setupDataLoader, inferResults, setupDevice, filterChannels, DistributedOptions
+
 
 #from geopy import distance
 
@@ -427,6 +430,7 @@ class ClimatologyEvaluator():
         climatology = climatology.astype(np.float32)
         climatology.tofile(os.path.join(outfold, typen+"climatology.bin"))
 
+
 class DrawImageEvaluator():
     def __init__(self, outpath, run_name, no):
         outfolder = os.path.join(outpath, "OutputImages")
@@ -542,6 +546,7 @@ def parseArguments():
     parser.add_argument('--drawImages', action = 'store_true', help = 'draw results of each iteration')
     parser.add_argument('--climatology', action='store_true', default = False, help = 'Create a Climatology')
     parser.add_argument('--writeOut', action='store_true', default = False, help = 'Write all Results to File')
+    parser.add_argument('--clip', action='store_true', default=False, help = 'Create Gif from outputs')
     args = parser.parse_args()
     
     return args
@@ -641,7 +646,7 @@ def performInference(model, loader, num_samples, evaluator, parOpt, args):
             smoutputs = inferResults(model, inputs, args)
         
         # no labels necessary
-        if(args.climatology or args.writeOut):
+        if(args.climatology or args.writeOut or args.clip):
             evaluator.evaluate(None, smoutputs.cpu(), filename)
         # labels are necessary
         else:
@@ -667,7 +672,7 @@ if __name__ == "__main__":
     print(data_dims)
 
 
-    # Data information
+    # Data informationa
     in_channels = data_dims[0]
     levels = data_dims[0]
     latRes = data_dims[1]
@@ -711,7 +716,7 @@ if __name__ == "__main__":
         tgtlats = np.array((evlats[0]+evdiff , evlats[1]-evdiff))
         tgtlons = np.array((evlons[0]-evdiff , evlons[1]+evdiff))
 
-    evaluator = None
+    valuator = None
     # Basic: CSI Evaluation
     if(args.CSI):
         evaluator = CSIEvaluator(args.outpath, args.outname, args, inlats, inlons, tgtlats, tgtlons, evlats, evlons)

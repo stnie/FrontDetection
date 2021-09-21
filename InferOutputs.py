@@ -24,7 +24,7 @@ from IOModules.csbReader import *
 
 from NetInfoImport import *
 
-from FrontPostProcessing import filterFronts
+from FrontPostProcessing import filterFronts, filterFrontsFreeBorder
 
 class DistributedOptions():
     def __init__(self):
@@ -50,6 +50,7 @@ def parseArguments():
     parser.add_argument('--labelGroupingList', type = str, default = None, help = 'Comma separated list of label groups \n possible fields are w c o s (warm, cold, occluson, stationary)')
     parser.add_argument('--fromFile', type = str, default = None, help = 'show the inividual error values during inference')
     parser.add_argument('--border', type = int, default = 5, help = "A Border in degree which is not evaluated")
+    parser.add_argument('--skip', type = int, default = 0, help = "How many of the data should be skipped (skip + not skipped = num_samples)")
     args = parser.parse_args()
     args.binary = args.classes == 1
     
@@ -95,7 +96,7 @@ def setupDataset(args):
     myEraExtractor = DerivativeFlippingAwareEraExtractor(variables, [], [], 0.0, 0 , 1, normType = normType, sharedObj = None)
     # Create Dataset
     
-    data_set = WeatherFrontDataset(data_dir=data_fold, label_dir=None, mapTypes = mapTypes, levelRange = myLevelRange, transform=myTransform, outSize=cropsize, labelThickness= labelThickness, label_extractor = None, era_extractor = myEraExtractor, asCoords = False, has_subfolds = (True,False), removePrefix = 8)
+    data_set = WeatherFrontDataset(data_dir=data_fold, label_dir=None, mapTypes = mapTypes, levelRange = myLevelRange, transform=myTransform, outSize=cropsize, labelThickness= labelThickness, label_extractor = None, era_extractor = myEraExtractor, asCoords = False, has_subfolds = (True,False), removePrefix = 3)
     return data_set
 
 def setupDataLoader(data_set, numWorkers):
@@ -148,11 +149,13 @@ def performInference(model, loader, num_samples, parOpt, args):
     for idx, data in enumerate(tqdm(loader, desc ='eval'), 0):
         if(idx == num_samples):
             break
+        if(idx <= args.skip):
+            continue
         inputs, labels, filename = data
         inputs = inputs.to(device = parOpt.device, non_blocking=False)
         # Create Results
-        smoutputs = inferResults(model, inputs, args).astype(np.bool)
-        smoutputs.numpy().tofile(os.path.join(outname,filename[no:]))
+        smoutputs = inferResults(model, inputs, args).numpy().astype(np.bool)
+        smoutputs.tofile(os.path.join(outname,filename[0][no:]))
 
 def setupModel(args, parOpt):
     model = None
