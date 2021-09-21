@@ -14,10 +14,9 @@ import argparse
 from era5dataset.FrontDataset import *
 # ERA Extractors
 from era5dataset.EraExtractors import *
-
 from IOModules.csbReader import *
-
 from NetInfoImport import *
+from FrontPostProcessing import filterFronts
 
 import matplotlib
 matplotlib.use('Agg')
@@ -27,28 +26,27 @@ import matplotlib.pyplot as plt
 # Medium Bottle Net, 32 Batchsize, BottleneckLayer 128 256 128, 3 levels, lr = 0.01, lines +- 1
 # ~ 45% validation loss 
 
-from skimage import measure,morphology
+from skimage import measure
+from InferOutputs import inferResults, setupDataLoader, setupDevice, setupModel
 
-from FrontPostProcessing import filterFronts
+
 import netCDF4
 
-from era5dataset.ERA5Reader.readNetCDF import equivalentPotentialTemp
 from metpy.calc import equivalent_potential_temperature, dewpoint_from_specific_humidity, relative_humidity_from_specific_humidity
 from metpy.units import units
 from geopy import distance
-from scipy.optimize import root_scalar
 
+def rhi(p,q,T):
+    eps     = 0.622 # Molmassenverhältnis von Wasser zu Luft.
 
-class DistributedOptions():
-    def __init__(self):
-        self.myRank = -1
-        self.device = -1
-        self.local_rank = -1
-        self.world_size = -1
-        self.nproc_per_node = -1
-        self.nnodes = -1
-        self.node_rank = -1
+    preal   = np.array(q * (p*100)/(eps + (1 - eps) * q)) # Dampfdruck in hPa 
+               # in Abhängigkeit der spezifischen Feuchte(kg/kg) 
+               # und des Drucks(Pa)
+    picesat = np.array(np.exp(9.550426 - 5723.265/T + 3.53068 *
+        np.log(T)-0.00728332 * T)) # Saettigungsdampfdruck ueber Eis
 
+    rhi_return = preal/picesat
+    return(rhi_return)
 
 def parseArguments():
     parser = argparse.ArgumentParser(description='FrontNet')
@@ -59,6 +57,7 @@ def parseArguments():
     parser.add_argument('--disable-cuda', action='store_true', help='Disable CUDA')
     parser.add_argument('--device', type = int, default = 0, help = "number of device to use")
     parser.add_argument('--fullsize', action='store_true', help='test the network at the global scope')
+    parser.add_argument('--preCalc', action='store_true', help='test the network at the global scope')
     parser.add_argument('--NWS', action = 'store_true', help='use Resolution of hires')
     parser.add_argument('--num_samples', type = int, default = -1, help='number of samples to infere from the dataset')
     parser.add_argument('--classes', type = int, default = 1, help = 'How many classes the network should predict (binary case has 1 class denoted by probabilities)')
@@ -69,20 +68,11 @@ def parseArguments():
     parser.add_argument('--fromFile', type = str, default = None, help = 'show the inividual error values during inference')
     parser.add_argument('--calcType', type = str, default = "ML", help = 'from which fronts should the crossing be calculated')
     parser.add_argument('--calcVar', type = str, default = "t", help = 'which variable to measure along the cross section')
+    parser.add_argument('--secPath', type = str, default = None, help = 'Path to folder with secondary data containing variable information to be evaluated. Data should be stored as <secPath>/YYYY/MM/<fileID>YYYYMMDD_HH.nc . <fileID> is an Identifier based on the type of file (e.g. B,Z,precip)')
     args = parser.parse_args()
     args.binary = args.classes == 1
     
     return args
-
-def setupDevice(args):
-    parOpt = DistributedOptions()
-    parOpt.myRank = 0
-    if not args.disable_cuda and torch.cuda.is_available():
-        torch.cuda.set_device(args.device)
-        parOpt.device = torch.device('cuda')
-    else:
-        parOpt.device = torch.device('cpu')
-    return parOpt
     
 def setupDataset(args):
     data_fold = args.data
@@ -93,6 +83,13 @@ def setupDataset(args):
         mapTypes = {"NA": ("NA", (90,-89.75), (-180,180), (-0.25,0.25)) }
         if(args.NWS):
             mapTypes = {"hires": ("hires", (90, -89.75), (-180, 180), (-0.25,0.25)) }
+    elif(args.preCalc and not args.fullsize):
+        # add another 5 degree to the input, such that we can savely extract lines from fronts at the corner of evaluation
+        cropsize = (55*4,100*4)
+        mapTypes = {"NA": ("NA", (75+5,30.25-5), (-50-5,40+5), (-stepsize, stepsize), None)}
+        if(args.NWS):
+            cropsize = (55*4, 95*4) 
+            mapTypes = {"hires": ("hires", (75+5, 30.25-5), (-140-5, -55+5), (-stepsize,stepsize), None) }
     else:
         # add another 5 degree to the input, such that we can savely extract lines from fronts at the corner of evaluation
         cropsize = (56*4,100*4)
@@ -100,13 +97,6 @@ def setupDataset(args):
         if(args.NWS):
             cropsize = (56*4, 96*4) 
             mapTypes = {"hires": ("hires", (76+5, 30.25-5), (-141-5, -55+5), (-stepsize,stepsize), None) }
-    # only atlantic 
-    if(False):
-        cropsize = (120,160)
-        mapTypes = {"NA": ("NA", (60,30.25), (-50,-10), (-0.25,0.25))}
-        if(args.NWS):
-            mapTypes = {"hires": ("hires", (60, 30.25), (-50, -10), (-0.25,0.25)) }
-
     
     myLevelRange = np.arange(105,138,4)
 
@@ -130,34 +120,25 @@ def setupDataset(args):
         myLevelRange = info["levelrange"]
         print(variables, normType, myLevelRange)
 
-    # append the basic wind to get the directions
-    variables.insert(6,"base(u)")
-    variables.insert(7,"base(v)")
-    variables.insert(8,"ept")
-
     myEraExtractor = DerivativeFlippingAwareEraExtractor(variables, [], [], 0.0, 0 , 1, normType = normType, sharedObj = None)
+
+    subfolds = (True, False)
+    remPref = 3
+
     if(ETH):
         myEraExtractor = ETHEraExtractor()
+        subfolds = (False, False)
+        remPref = 1
+    if(args.preCalc):
+        myEraExtractor = BinaryResultExtractor()
+        subfolds = (False, False)
+        remPref = 0
     
 
     # Create Dataset
-    data_set = WeatherFrontDataset(data_dir=data_fold, label_dir=label_fold, mapTypes = mapTypes, levelRange = myLevelRange, transform=myTransform, outSize=cropsize, labelThickness= labelThickness, label_extractor = myLabelExtractor, era_extractor = myEraExtractor, has_subfolds = (True, False), asCoords = False, removePrefix = 3)
+    data_set = WeatherFrontDataset(data_dir=data_fold, label_dir=label_fold, mapTypes = mapTypes, levelRange = myLevelRange, transform=myTransform, outSize=cropsize, labelThickness= labelThickness, label_extractor = myLabelExtractor, era_extractor = myEraExtractor, has_subfolds = subfolds, asCoords = False, removePrefix = remPref)
     return data_set
 
-
-
-
-    
-
-def setupDataLoader(data_set, args):
-    # Create DataLoader 
-    indices = list(range(len(data_set)))
-    sampler = SequentialSampler(data_set)
-
-    loader = DataLoader(data_set, shuffle=False, 
-    batch_size = 1, sampler = sampler, pin_memory = True, 
-    collate_fn = collate_wrapper(args.stacked, False, 0), num_workers = 0)
-    return loader
 
 def bilinear_interpolate(im, x, y):
     x = np.asarray(x)
@@ -292,11 +273,6 @@ def getValAlongNormal(image, var, udir, vdir, length, border, grad, orientation,
             
             # get a better estimation respecting the projection 
             pointsY, pointsX = getSamplePositionCirc((py, px), offset, myYdir, myXdir, length)
-            #pointsY, pointsX = getSamplePosition(py, px, myYdir, myXdir, length)
-            #pointsY = py-myYdir*np.arange(-length,length+1)
-            #pointsX = px+myXdir*np.arange(-length,length+1)
-
-            #print("mypts:", py, px, pointsY, pointsX, flush=True)
             # get the mean wind along the normal
             direction = [np.mean(bilinear_interpolate(udir, pointsX, pointsY)), np.mean(bilinear_interpolate(vdir, pointsX,pointsY))]
             # get the dot product of mean wind along the normal and the normal, to determine whether or not both are in the same direction
@@ -321,46 +297,184 @@ def getValAlongNormal(image, var, udir, vdir, length, border, grad, orientation,
                 avgVar[:,tgtChannel] += np.abs(np.cumsum(np.gradient(avgVarBuf)))
                 sqavgVar[:,tgtChannel] += np.gradient(sqavgVarBuf)**2
             elif(grad and not orientation):
-                avgVar[:,tgtChannel] += np.gradient(avgVarBuf)
-                sqavgVar[:,tgtChannel] += np.gradient(sqavgVarBuf)**2
+                # grad 2 and 3 are for the TFP
+                if(grad == 1):
+                    avgVar[:,tgtChannel] += np.gradient(avgVarBuf)
+                    sqavgVar[:,tgtChannel] += np.gradient(sqavgVarBuf)**2
+                elif(grad==2):
+                    print("We use this here!", grad)
+                    avgVar[:,tgtChannel] += np.gradient(np.gradient(avgVarBuf))
+                    sqavgVar[:,tgtChannel] += np.gradient(np.gradient(sqavgVarBuf))**2
+                elif(grad==3):
+                    print("We use this here!", grad)
+                    avgVar[:,tgtChannel] += np.gradient(np.gradient(np.gradient(avgVarBuf)))
+                    sqavgVar[:,tgtChannel] += np.gradient(np.gradient(np.gradient(sqavgVarBuf)))**2
             else:
                 avgVar[:,tgtChannel] += avgVarBuf
                 sqavgVar[:,tgtChannel] += sqavgVarBuf**2
     return avgVar, sqavgVar, numPoints
 
 
-def inferResults(model, inputs, args):
-    if(args.ETH or args.calcType == "WS"):
-        outputs = inputs.permute(0,2,3,1)
-        smoutputs = inputs.permute(0,2,3,1)
-    else:
-        tgtIn = torch.cat((inputs[:,:6*9], inputs[:,-1:]), dim = 1)
-        outputs = model(tgtIn)
-        outputs = outputs.permute(0,2,3,1)
-        smoutputs = torch.softmax(outputs.data, dim = -1)
-        smoutputs[0,:,:,0] = 1-smoutputs[0,:,:,0]
-
-        # If some labels are not to be considered additionally remove them from the 0 case (all others don't matter)
-        labelsToUse = args.labelGroupingList.split(",")
-        possLabels = ["w","c","o","s"]
-        for idx, possLab in enumerate(possLabels, 1):
-            isIn = False
-            for labelGroup in labelsToUse:
-                if(possLab in labelGroup):
-                    isIn = True
-            if(not isIn):
-                smoutputs[0,:,:,0] -= smoutputs[0,:,:,idx]
-        smoutputs = filterFronts(smoutputs.cpu().numpy(), 20)
-    return outputs, smoutputs
-
 def readSecondary(rootgrp, var, time, level, latrange, lonrange):
-    vals = np.zeros((abs(int(latrange[0])-int(latrange[1]))*4, abs(int(lonrange[1])-int(lonrange[0]))*4))
-    if(lonrange[0] < 0 and lonrange[1] >= 0):
-        vals[:,:-int(lonrange[0])*4] =  rootgrp[var][time,level,int(90-latrange[0])*4:int(90-latrange[1])*4, int(lonrange[0])*4:]
-        vals[:,-int(lonrange[0])*4:] = rootgrp[var][time,level,int(90-latrange[0])*4:int(90-latrange[1])*4, :int(lonrange[1])*4]
+    vals = np.zeros((abs(int((latrange[0]-latrange[1])*4)), abs(int((lonrange[1]-lonrange[0])*4))))
+    if(level is None):
+        if(lonrange[0] < 0 and lonrange[1] >= 0):
+            vals[:,:-int(lonrange[0]*4)] =  rootgrp[var][time,int((90-latrange[0])*4):int((90-latrange[1])*4), int(lonrange[0]*4):]
+            vals[:,-int(lonrange[0]*4):] = rootgrp[var][time,int((90-latrange[0])*4):int((90-latrange[1])*4), :int(lonrange[1]*4)]
+        else:
+            vals[:,:] = rootgrp[var][time,int((90-latrange[0])*4):int((90-latrange[1])*4), int(lonrange[0]*4):int(lonrange[1]*4)]
     else:
-        vals[:,:] = rootgrp[var][time,level,int(90-latrange[0])*4:int(90-latrange[1])*4, int(lonrange[0])*4:int(lonrange[1])*4]
+        if(lonrange[0] < 0 and lonrange[1] >= 0):
+            vals[:,:-int(lonrange[0]*4)] =  rootgrp[var][time,level,int((90-latrange[0])*4):int((90-latrange[1])*4), int(lonrange[0]*4):]
+            vals[:,-int(lonrange[0]*4):] = rootgrp[var][time,level,int((90-latrange[0])*4):int((90-latrange[1])*4), :int(lonrange[1]*4)]
+        else:
+            vals[:,:] = rootgrp[var][time,level,int((90-latrange[0])*4):int((90-latrange[1])*4), int(lonrange[0]*4):int(lonrange[1]*4)]
     return vals
+
+
+def getWindData(file, calcVar, latrange, lonrange):
+    rootgrpwind = netCDF4.Dataset(os.path.realpath(file), "r", format="NETCDF4", parallel=False)
+    if("_z" in calcVar):
+        udir = torch.from_numpy(readSecondary(rootgrpwind, "var131", 0, 9, latrange, lonrange))
+        vdir = torch.from_numpy(readSecondary(rootgrpwind, "var132", 0, 9, latrange, lonrange))
+    elif("_b" in calcVar or "_precip" in calcVar):
+        udir = torch.from_numpy(readSecondary(rootgrpwind, "u10", 0, None, latrange, lonrange))
+        vdir = torch.from_numpy(readSecondary(rootgrpwind, "v10", 0, None, latrange, lonrange))
+    elif("_ml" in calcVar):
+        udir = torch.from_numpy(readSecondary(rootgrpwind, "u", 0, -1, latrange, lonrange))
+        vdir = torch.from_numpy(readSecondary(rootgrpwind, "v", 0, -1, latrange, lonrange))
+    rootgrpwind.close()
+    return udir, vdir
+
+
+def getSecondaryData(file, calcVar, latrange, lonrange):
+    rootgrp = netCDF4.Dataset(os.path.realpath(file), "r", format="NETCDF4", parallel=False)
+    # determine variable, which should be evaluated at lowest model level (L137)
+    # ml files are [-180 to 180]E => add the 180 offset when reading from those files
+    # TODO-- update to the more general read method from the reader
+    if(calcVar == "t_ml" or calcVar == "dt_ml"):
+        grad = calcVar == "dt_ml"
+        var = readSecondary(rootgrp, "t", 0, -1, latrange, lonrange+180)
+    elif(calcVar == "q_ml" or calcVar == "dq_ml"):
+        grad = calcVar == "dq_ml"
+        var = readSecondary(rootgrp, "q", 0, -1, latrange, lonrange+180)
+    elif(calcVar == "wind_ml"):
+        # wind speed
+        u = readSecondary(rootgrp, "u", 0, -1, latrange, lonrange+180)
+        v = readSecondary(rootgrp, "v", 0, -1, latrange, lonrange+180)
+        var = torch.abs(torch.from_numpy(u+1j*v))
+    elif(calcVar == "winddir_ml"):
+        # wind speed
+        grad = True
+        orientation = True
+        u = readSecondary(rootgrp, "u", 0, -1, latrange, lonrange+180)
+        v = readSecondary(rootgrp, "v", 0, -1, latrange, lonrange+180)
+        var = torch.angle(torch.from_numpy(u+1j*v))
+
+    # Read 850 hPA instead
+    elif(calcVar == "wind_z"):
+        u = readSecondary(rootgrp, "var131", 0, 9, latrange, lonrange)
+        v = readSecondary(rootgrp, "var132", 0, 9, latrange, lonrange)
+        var = torch.abs(torch.from_numpy(u+1j*v))    
+    elif(calcVar == "ept_z" or calcVar == "dept_z" or calcVar == "tfp_z" or calcVar == "dtfp_z"):
+        grad = calcVar == "dept_z"
+        t = units.Quantity(readSecondary(rootgrp, "var130", 0, 9, latrange, lonrange), "K")
+        q = readSecondary(rootgrp, "var133", 0, 9, latrange, lonrange)
+        p = units.Quantity(85000, "Pa")
+        dewp = dewpoint_from_specific_humidity(p,t,q)
+        ept = equivalent_potential_temperature(p,t,dewp)
+        var = torch.from_numpy(ept.magnitude)
+    elif(calcVar == "t_z" or calcVar == "dt_z"):
+        grad = calcVar == "dt_z"
+        t = readSecondary(rootgrp, "var130", 0, 9, latrange, lonrange)
+        var = torch.from_numpy(t)
+        print(var.shape)
+    elif(calcVar == "q_z" or calcVar == "dq_z"):
+        grad = calcVar == "dq_z"
+        q = readSecondary(rootgrp, "var133", 0, 9, latrange, lonrange)
+        var = torch.from_numpy(q)
+    elif(calcVar == "rq_z" or calcVar == "drq_z"):
+        grad = calcVar == "drq_z"
+        t = units.Quantity(readSecondary(rootgrp, "var130", 0, 9, latrange, lonrange), "K")
+        q = readSecondary(rootgrp, "var133", 0, 9, latrange, lonrange)
+        p = units.Quantity(85000, "Pa")
+        rq = relative_humidity_from_specific_humidity(p,t,q)
+        var = torch.from_numpy(rq.magnitude)
+    elif(calcVar == "rqi_z" or calcVar == "drqi_z"):
+        grad = calcVar == "drqi_z"
+        t = units.Quantity(readSecondary(rootgrp, "var130", 0, 3, latrange, lonrange), "K")
+        q = readSecondary(rootgrp, "var133", 0, 3, latrange, lonrange)
+        p = units.Quantity(30000, "Pa")
+        rq = rhi(p.magnitude/100,q, t.magnitude)
+        var = ((torch.from_numpy(rq)>1.0) * (t.magnitude>200) * (t.magnitude < 233))*1.0
+    # These should work, but are not tested!
+    # 10m winds
+    elif(calcVar == "winddir_b"):
+        grad = True
+        orientation = True
+        u10dir = readSecondary(rootgrp, "u10", 0, None, latrange, lonrange)
+        v10dir = readSecondary(rootgrp, "v10", 0, None, latrange, lonrange)
+        wind = torch.from_numpy(u10dir+1j*v10dir)
+        var = torch.angle(wind)
+    elif(calcVar == "wind_b"):
+        u10dir = readSecondary(rootgrp, "u10", 0, None, latrange, lonrange)
+        v10dir = readSecondary(rootgrp, "v10", 0, None, latrange, lonrange)
+        wind = torch.from_numpy(u10dir+1j*v10dir)
+        var = torch.abs(wind)
+    elif(calcVar == "sp_b"):
+        var = readSecondary(rootgrp, "sp", 0, None, latrange, lonrange)
+    # precipitation
+    elif(calcVar == "tp_precip"):
+        prec = readSecondary(rootgrp, "tp", 0, None, latrange, lonrange)
+        file2 = "/lustre/project/m2_jgu-binaryhpc/Front_Detection_Data/PercentileData/Precipitation_tp_99_percentile.nc"
+        rootgrp2 = netCDF4.Dataset(os.path.realpath(file2), "r", format="NETCDF4", parallel=False)
+        precoff = readSecondary(rootgrp2, "tp", 0, None, latrange, lonrange)
+        var = torch.from_numpy(prec>precoff)*1.0
+    rootgrp.close()
+    return var
+
+def getModifier(calcVar):
+    orientation = "winddir" in calcVar
+    grad = (calcVar[0]=="d" or orientation)*1
+    if("tfp" in calcVar):
+        grad = 2
+    if("dtfp" in calcVar):
+        grad = 3
+    return grad, orientation
+
+def getDate(filename, no):
+    year,month,day,hour = filename[no:no+4],filename[no+4:no+6],filename[no+6:no+8],filename[no+9:no+11]
+    return year,month,day,hour
+
+def getTgtRange(data_set, mapType):
+    latoff= (data_set.mapTypes[mapType][1][0]-90)/data_set.mapTypes[mapType][3][0]
+    lonoff= (data_set.mapTypes[mapType][2][0]+180)/data_set.mapTypes[mapType][3][1]
+    print("offsets for the corresponding mapType, to estimate distance in km:", latoff, lonoff)
+    tgt_latrange, tgt_lonrange = data_set.getCropRange(data_set.mapTypes[mapType][1], data_set.mapTypes[mapType][2], data_set.mapTypes[mapType][3], 0)
+    return tgt_latrange, tgt_lonrange
+
+
+def getSecondaryFile(calcVar, path, year, month, day, hour):
+    if("_z" in calcVar):
+        newFile = os.path.join(path, year, month,"Z{0}{1}{2}_{3}.nc".format(year,month,day,hour))
+    if("_b" in calcVar):
+        newFile = os.path.join(path, year, month,"B{0}{1}{2}_{3}.nc".format(year,month,day,hour))
+    if("_precip" in calcVar):
+        newFile = os.path.join(path, year, month,"precip{0}{1}{2}_{3}.nc".format(year,month,day,hour))
+    if("_ml" in calcVar):
+        newFile = os.path.join(path, year, month,"ml{0}{1}{2}_{3}.nc".format(year,month,day,hour))
+    return newFile
+
+def getWindFile(calcVar, path, year, month, day, hour):
+    if("_z" in calcVar):
+        windFile = os.path.join(path, year, month,"Z{0}{1}{2}_{3}.nc".format(year,month,day,hour))
+    if("_b" in calcVar):
+        windFile = os.path.join(path, year, month,"B{0}{1}{2}_{3}.nc".format(year,month,day,hour))
+    if("_precip" in calcVar):
+        windFile = os.path.join(path, year, month,"B{0}{1}{2}_{3}.nc".format(year,month,day,hour))
+    if("_ml" in calcVar):
+        windFile = os.path.join(path, year, month,"ml{0}{1}{2}_{3}.nc".format(year,month,day,hour))
+    return windFile
 
 
 def performInference(model, loader, num_samples, parOpt, args):
@@ -374,6 +488,22 @@ def performInference(model, loader, num_samples, parOpt, args):
     sqavgVar = np.zeros((2*length+1, out_channels))
     numPoints = np.zeros((out_channels))
     skip = 0#31*4+28*4+31*4+30*4+31*4+30*4+31*4
+
+    # Path to Secondary File
+    secondaryPath = args.secPath
+    if(secondaryPath is None):
+        print("Secondary Path needed for this type of evaluation!")
+        exit(1)
+    
+    data_set = loader.dataset
+    no = data_set.removePrefix
+    # Get Range
+    mapType = "hires" if args.NWS else "NA"
+    latoff= (data_set.mapTypes[mapType][1][0]-90)/data_set.mapTypes[mapType][3][0]
+    lonoff= (data_set.mapTypes[mapType][2][0]+180)/data_set.mapTypes[mapType][3][1]
+    tgt_latrange, tgt_lonrange = getTgtRange(data_set, mapType)
+    print("offsets for the corresponding mapType, to estimate distance in km:", tgt_latrange, tgt_lonrange)
+
     for idx, data in enumerate(tqdm(loader, desc ='eval'), 0):
         if idx<skip:
             continue
@@ -382,132 +512,30 @@ def performInference(model, loader, num_samples, parOpt, args):
         inputs, labels, filename = data
         inputs = inputs.to(device = parOpt.device, non_blocking=False)
         labels = labels.to(device = parOpt.device, non_blocking=False)
-        # remove all short labels caused by cropping
-        labels = filterFronts(labels.cpu().numpy(), border)
-        _, outputs = inferResults(model, inputs, args)
         
+        # remove all short labels (# 1 is a dummy value, evaluation will skip 40 pixel anyways)
+        labels = filterFronts(labels.cpu().numpy(), 1)
+        if(args.ETH or args.calcType == "WS"):
+            outputs = inputs.permute(0,2,3,1)
+        elif(args.preCalc):
+            outputs = (inputs*1).cpu().numpy()
+            print(outputs.shape)
+        else:
+            outputs = inferResults(model, inputs, args)
+                
+        year,month,day,hour = getDate(filename[0], no)
 
-        #Hard coded, for derivatives
-        meanu, varu = 1.27024432, 6.74232481e+01
-        meanv, varv = 1.0213897e-01, 4.36244384e+01
-        meant, vart = 2.75355461e+02, 3.20404803e+02
-        meanq, varq = 5.57926815e-03, 2.72627785e-05 
-        meansp, varsp = 8.65211548e+04, 1.49460630e+08
-
-        udir = inputs[0,9*6+8]
-        vdir = inputs[0,9*7+8]
-        
-        # Generally no gradient (finite differences should be calculated)
-        grad = False
-        orientation = False
-
-        data_set = loader.dataset
-        no = data_set.removePrefix
-        year,month,day,hour = filename[0][no:no+4],filename[0][no+4:no+6],filename[0][no+6:no+8],filename[0][no+9:no+11]
         # we do not have the 29th of february for ZFiles
         if("_z" in args.calcVar and month == "02" and day == "29"):
             continue
-        mapType = "hires" if args.NWS else "NA"
-        latoff= (data_set.mapTypes[mapType][1][0]-90)/data_set.mapTypes[mapType][3][0]
-        lonoff= (data_set.mapTypes[mapType][2][0]+180)/data_set.mapTypes[mapType][3][1]
-        print(latoff, lonoff)
-
-        # determine variable, which should be evaluated
-        if(args.calcVar == "t" or args.calcVar == "dt"):
-            grad = args.calcVar == "dt"
-            var = inputs[0,8]*np.sqrt(vart)+meant
-        elif(args.calcVar == "q" or args.calcVar == "dq"):
-            grad = args.calcVar == "dq"
-            var = inputs[0,17]*np.sqrt(varq)+meanq
-        elif(args.calcVar == "sp"):
-            var = inputs[0,5*9+8]*np.sqrt(varsp)+meansp
-        elif(args.calcVar == "wind"):
-            # wind speed
-            var = torch.abs(udir+1j*vdir)*2
-        elif(args.calcVar == "wind_z"):
-            newFile = "/lustre/project/m2_jgu-w2w/ipaserver/ERA5/{0}/{1}/Z{0}{1}{2}_{3}.nc".format(year,month,day,hour)
-            rootgrp = netCDF4.Dataset(os.path.realpath(newFile), "r", format="NETCDF4", parallel=False)
-            tgt_latrange, tgt_lonrange = data_set.getCropRange(data_set.mapTypes[mapType][1], data_set.mapTypes[mapType][2], data_set.mapTypes[mapType][3], 0)
-            u = readSecondary(rootgrp, "var131", 0, 9, tgt_latrange, tgt_lonrange)
-            v = readSecondary(rootgrp, "var132", 0, 9, tgt_latrange, tgt_lonrange)
-            var = torch.abs(torch.from_numpy(u+1j*v))
-        elif(args.calcVar == "ept_z" or args.calcVar == "dept_z"):
-            grad = args.calcVar == "dept_z"
-            newFile = "/lustre/project/m2_jgu-w2w/ipaserver/ERA5/{0}/{1}/Z{0}{1}{2}_{3}.nc".format(year,month,day,hour)
-            rootgrp = netCDF4.Dataset(os.path.realpath(newFile), "r", format="NETCDF4", parallel=False)
-            tgt_latrange, tgt_lonrange = data_set.getCropRange(data_set.mapTypes[mapType][1], data_set.mapTypes[mapType][2], data_set.mapTypes[mapType][3], 0)
-            t = units.Quantity(readSecondary(rootgrp, "var130", 0, 9, tgt_latrange, tgt_lonrange), "K")
-            q = readSecondary(rootgrp, "var133", 0, 9, tgt_latrange, tgt_lonrange)
-            p = units.Quantity(85000, "Pa")
-            dewp = dewpoint_from_specific_humidity(p,t,q)
-            ept = equivalent_potential_temperature(p,t,dewp)
-            var = torch.from_numpy(ept.magnitude)
-            rootgrp.close()
-        elif(args.calcVar == "t_z" or args.calcVar == "dt_z"):
-            grad = args.calcVar == "dt_z"
-            newFile = "/lustre/project/m2_jgu-w2w/ipaserver/ERA5/{0}/{1}/Z{0}{1}{2}_{3}.nc".format(year,month,day,hour)
-            rootgrp = netCDF4.Dataset(os.path.realpath(newFile), "r", format="NETCDF4", parallel=False)
-            tgt_latrange, tgt_lonrange = data_set.getCropRange(data_set.mapTypes[mapType][1], data_set.mapTypes[mapType][2], data_set.mapTypes[mapType][3], 0)
-            #t = rootgrp["var130"][0,9,int(90-tgt_latrange[0])*4:int(90-tgt_latrange[1])*4, int(tgt_lonrage[0])*4:int(tgt_lonrage[1])*4]
-            t = readSecondary(rootgrp, "var130", 0, 9, tgt_latrange, tgt_lonrange)
-            var = torch.from_numpy(t)
-            print(var.shape)
-            rootgrp.close()
-        elif(args.calcVar == "q_z" or args.calcVar == "dq_z"):
-            grad = args.calcVar == "dq_z"
-            var = inputs[0,9*8+8]
-            newFile = "/lustre/project/m2_jgu-w2w/ipaserver/ERA5/{0}/{1}/Z{0}{1}{2}_{3}.nc".format(year,month,day,hour)
-            rootgrp = netCDF4.Dataset(os.path.realpath(newFile), "r", format="NETCDF4", parallel=False)
-            tgt_latrange, tgt_lonrange = data_set.getCropRange(data_set.mapTypes[mapType][1], data_set.mapTypes[mapType][2], data_set.mapTypes[mapType][3], 0)
-            #q = rootgrp["var133"][0,9,int(90-tgt_latrange[0])*4:int(90-tgt_latrange[1])*4, int(tgt_lonrage[0])*4:int(tgt_lonrage[1])*4]
-            q = readSecondary(rootgrp, "var133", 0, 9, tgt_latrange, tgt_lonrange)
-            var = torch.from_numpy(q)
-            rootgrp.close()
-        elif(args.calcVar == "rq_z" or args.calcVar == "drq_z"):
-            grad = args.calcVar == "drq_z"
-            var = inputs[0,9*8+8]
-            newFile = "/lustre/project/m2_jgu-w2w/ipaserver/ERA5/{0}/{1}/Z{0}{1}{2}_{3}.nc".format(year,month,day,hour)
-            rootgrp = netCDF4.Dataset(os.path.realpath(newFile), "r", format="NETCDF4", parallel=False)
-            tgt_latrange, tgt_lonrange = data_set.getCropRange(data_set.mapTypes[mapType][1], data_set.mapTypes[mapType][2], data_set.mapTypes[mapType][3], 0)
-            #q = rootgrp["var133"][0,9,int(90-tgt_latrange[0])*4:int(90-tgt_latrange[1])*4, int(tgt_lonrage[0])*4:int(tgt_lonrage[1])*4]
-            t = units.Quantity(readSecondary(rootgrp, "var130", 0, 9, tgt_latrange, tgt_lonrange), "K")
-            q = readSecondary(rootgrp, "var133", 0, 9, tgt_latrange, tgt_lonrange)
-            p = units.Quantity(85000, "Pa")
-            rq = relative_humidity_from_specific_humidity(p,t,q)
-            var = torch.from_numpy(rq.magnitude)
-            rootgrp.close()
-        elif(args.calcVar == "winddir"):
-            # wind speed
-            grad = True
-            orientation = True
-            var = torch.angle(udir+1j*vdir)
-        elif(args.calcVar == "10mwinddir"):
-            grad = True
-            orientation = True
-            newFile = "/lustre/project/m2_jgu-w2w/ipaserver/ERA5/{0}/{1}/B{0}{1}{2}_{3}.nc".format(year,month,day,hour)
-            rootgrp = netCDF4.Dataset(os.path.realpath(newFile), "r", format="NETCDF4", parallel=False)
-            tgt_latrange, tgt_lonrage = data_set.getCropRange(data_set.mapTypes[mapType][1], data_set.mapTypes[mapType][2], data_set.mapTypes[mapType][3], 0)
-            u10dir = rootgrp["u10"][0,int(90-tgt_latrange[0])*4:int(90-tgt_latrange[1])*4, int(tgt_lonrage[0])*4:int(tgt_lonrage[1])*4]
-            v10dir = rootgrp["v10"][0,int(90-tgt_latrange[0])*4:int(90-tgt_latrange[1])*4, int(tgt_lonrage[0])*4:int(tgt_lonrage[1])*4]
-            wind = torch.from_numpy(u10dir+1j*v10dir)
-            var = torch.angle(wind)
-            rootgrp.close()
-        elif(args.calcVar == "10mwind"):
-            newFile = "/lustre/project/m2_jgu-w2w/ipaserver/ERA5/{0}/{1}/B{0}{1}{2}_{3}.nc".format(year,month,day,hour)
-            rootgrp = netCDF4.Dataset(os.path.realpath(newFile), "r", format="NETCDF4", parallel=False)
-            tgt_latrange, tgt_lonrage = data_set.getCropRange(data_set.mapTypes[mapType][1], data_set.mapTypes[mapType][2], data_set.mapTypes[mapType][3], 0)
-            u10dir = rootgrp["u10"][0,int(90-tgt_latrange[0])*4:int(90-tgt_latrange[1])*4, int(tgt_lonrage[0])*4:int(tgt_lonrage[1])*4]
-            v10dir = rootgrp["v10"][0,int(90-tgt_latrange[0])*4:int(90-tgt_latrange[1])*4, int(tgt_lonrage[0])*4:int(tgt_lonrage[1])*4]
-            wind = torch.from_numpy(u10dir+1j*v10dir)
-            var = torch.abs(wind)
-            rootgrp.close()
-        elif(args.calcVar == "precip"):
-            newFile = "/lustre/project/m2_jgu-w2w/ipaserver/ERA5/{0}/{1}/precip{0}{1}{2}_{3}.nc".format(year,month,day,hour)
-            rootgrp = netCDF4.Dataset(os.path.realpath(newFile), "r", format="NETCDF4", parallel=False)
-            tgt_latrange, tgt_lonrage = data_set.getCropRange(data_set.mapTypes[mapType][1], data_set.mapTypes[mapType][2], data_set.mapTypes[mapType][3], 0)
-            print(tgt_lonrange, tgt_latrange)
-            prec = rootgrp["tp"][0,int(90-tgt_latrange[0])*4:int(90-tgt_latrange[1])*4, int(tgt_lonrage[0])*4:int(tgt_lonrage[1])*4]
-            var = torch.from_numpy(prec)
+        
+        newFile = getSecondaryFile(args.calcVar, secondaryPath, year, month, day, hour)
+        windFile = getWindFile(args.calcVar, secondaryPath, year, month, day, hour)
+        
+        udir, vdir = getWindData(windFile, args.calcVar, tgt_latrange, tgt_lonrange)
+        # Generally no gradient (finite differences should be calculated)
+        var = getSecondaryData(newFile, args.calcVar, tgt_latrange, tgt_lonrange)
+        grad, orientation = getModifier(args.calcVar)
         
         # Which kind of fronts should be tested (ML -> Network, WS -> WeatherService, OP -> over predicted (false positives), CP -> correct predicted (true positives, network oriented), 
         # NP -> not ptedicted (false negatives), CL correctly labeled (true positives, weather service oriented)
@@ -545,7 +573,6 @@ def performInference(model, loader, num_samples, parOpt, args):
         avgVar += curravg
         sqavgVar += currsqavg
         numPoints += currnumPoints
-
     means = avgVar / numPoints
     variances = sqavgVar / numPoints - means*means
     print(numPoints)
@@ -567,7 +594,8 @@ if __name__ == "__main__":
 
     args.stacked = True
     data_set = setupDataset(args)    
-    loader = setupDataLoader(data_set, args)
+    num_worker = 0 if (args.ETH or args.calcType == "WS") else 8
+    loader = setupDataLoader(data_set, num_worker)
     
 
     sample_data = data_set[0]
@@ -579,7 +607,7 @@ if __name__ == "__main__":
     levels = data_dims[0]
     latRes = data_dims[1]
     lonRes = data_dims[2]
-    
+    args.in_channels = in_channels
     out_channels = args.classes
     if(args.binary):
         out_channels = 1
@@ -600,18 +628,9 @@ if __name__ == "__main__":
         print("Labeltypes:", out_channels)
         print("")
 
-    if(not ETH):
-        #Load Net
-        embeddingFactor = 6
-        SubBlocks = (3,3,3)
-        kernel_size = 5
-        model = FDU2DNetLargeEmbedCombineModular(in_channel = in_channels, out_channel = out_channels, kernel_size = kernel_size, sub_blocks = SubBlocks, embedding_factor = embeddingFactor).to(parOpt.device)
-        model.load_state_dict(torch.load(args.net, map_location = parOpt.device))
-        model.eval()
-        if(parOpt.myRank == 0):
-            print()
-            print("Begin Evaluation of Data...")
-            print("Network:", model)
+    model = None
+    if(not(args.ETH or args.calcType == "WS" or args.preCalc)):
+       model = setupModel(args, parOpt)
 
     num_samples = len(loader)
     if(args.num_samples != -1):
