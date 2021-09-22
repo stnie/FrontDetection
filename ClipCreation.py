@@ -26,7 +26,7 @@ import matplotlib.pyplot as plt
 # Medium Bottle Net, 32 Batchsize, BottleneckLayer 128 256 128, 3 levels, lr = 0.01, lines +- 1
 # ~ 45% validation loss 
 
-from skimage import measure
+from skimage import measure, morphology
 from InferOutputs import inferResults, setupDataLoader, setupDevice, setupModel
 
 
@@ -58,7 +58,10 @@ def parseArguments():
     parser.add_argument('--fromFile', type = str, default = None, help = 'show the inividual error values during inference')
     parser.add_argument('--calcVar', type = str, default = "t", help = 'which variable to measure along the cross section')
     parser.add_argument('--secPath', type = str, default = None, help = 'Path to folder with secondary data containing variable information to be evaluated. Data should be stored as <secPath>/YYYY/MM/<fileID>YYYYMMDD_HH.nc . <fileID> is an Identifier based on the type of file (e.g. B,Z,precip)')
+    parser.add_argument('--alpha', type = float, default = 0, help='weight of constant background compared background variable. [0 to 1]')
+    parser.add_argument('--rgb', nargs='3', type = int, help='rgb weights of for the background variable [0..255] x 3')
     args = parser.parse_args()
+
     args.binary = args.classes == 1
     
     return args
@@ -169,6 +172,11 @@ def performInference(model, loader, num_samples, parOpt, args):
     lonoff= (data_set.mapTypes[mapType][2][0]+180)/data_set.mapTypes[mapType][3][1]
     tgt_latrange, tgt_lonrange = getTgtRange(data_set, mapType)
     print("offsets for the corresponding mapType, to estimate distance in km:", tgt_latrange, tgt_lonrange)
+    bgFile = "/lustre/project/m2_jgu-w2w/ipaserver/ERA5/era5_const.nc"
+    bgroot = netCDF4.Dataset(os.path.realpath(bgFile), "r", format="NETCDF4", parallel=False)
+    bgMap = (readSecondary(bgroot, "lsm", 0, None, tgt_latrange, tgt_lonrange)>0.0 )*1.0
+    #contourMap = 1 - (bgMap - morphology.binary_erosion(bgMap))
+    contourMap = torch.from_numpy(1 - (morphology.binary_dilation(bgMap)-bgMap))
     writer = imageio.get_writer(outname+".gif", mode="I", duration=0.1)
     for idx, data in enumerate(tqdm(loader, desc ='eval'), 0):
         if idx<skip:
@@ -223,9 +231,11 @@ def performInference(model, loader, num_samples, parOpt, args):
         mygifImg = outpred
         sumimg = np.sum(mygifImg, axis = -1) < 0.5
         # if a front is present => print the front, else print the background variable
-        mygifImg[:,:,0] = var * sumimg + mygifImg[:,:,0] * (~sumimg) 
-        mygifImg[:,:,1] = var * sumimg + mygifImg[:,:,1] * (~sumimg)
-        mygifImg[:,:,2] = var * sumimg + mygifImg[:,:,2] * (~sumimg)
+        alpha = args.alpha
+        mygifImg[:,:,0] = (alpha*contourMap + (1-alpha) * var * (args.rgb[0]/255.0)) * sumimg + mygifImg[:,:,0] * (~sumimg) 
+        mygifImg[:,:,1] = (alpha*contourMap + (1-alpha) * var * (args.rgb[1]/255.0)) * sumimg + mygifImg[:,:,1] * (~sumimg)
+        mygifImg[:,:,2] = (alpha*contourMap + (1-alpha) * var * (args.rgb[2]/255.0)) * sumimg + mygifImg[:,:,2] * (~sumimg)
+        
         # add the image to the gif
         writer.append_data((mygifImg[border:-border, border:-border]*255).astype(np.uint8))
     
