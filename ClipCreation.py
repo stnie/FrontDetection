@@ -32,7 +32,7 @@ from InferOutputs import inferResults, setupDataLoader, setupDevice, setupModel
 
 import netCDF4
 
-from FrontalCrossSection3 import getTgtRange, getDate, getSecondaryFile, getSecondaryData
+from FrontalCrossSection import getTgtRange, getDate, getSecondaryFile, getSecondaryData
 
 from era5dataset.ERA5Reader.readNetCDF import getValueRanges
 import imageio
@@ -59,7 +59,8 @@ def parseArguments():
     parser.add_argument('--calcVar', type = str, default = "t", help = 'which variable to measure along the cross section')
     parser.add_argument('--secPath', type = str, default = None, help = 'Path to folder with secondary data containing variable information to be evaluated. Data should be stored as <secPath>/YYYY/MM/<fileID>YYYYMMDD_HH.nc . <fileID> is an Identifier based on the type of file (e.g. B,Z,precip)')
     parser.add_argument('--alpha', type = float, default = 0, help='weight of constant background compared background variable. [0 to 1]')
-    parser.add_argument('--rgb', nargs='3', type = int, help='rgb weights of for the background variable [0..255] x 3')
+    parser.add_argument('--rgb', nargs=3, type = int, help='rgb weights of for the background variable [0..255] x 3')
+    parser.add_argument('--lsm', default = None, help='path to land-sea-mask netCDF file')
     args = parser.parse_args()
 
     args.binary = args.classes == 1
@@ -172,11 +173,16 @@ def performInference(model, loader, num_samples, parOpt, args):
     lonoff= (data_set.mapTypes[mapType][2][0]+180)/data_set.mapTypes[mapType][3][1]
     tgt_latrange, tgt_lonrange = getTgtRange(data_set, mapType)
     print("offsets for the corresponding mapType, to estimate distance in km:", tgt_latrange, tgt_lonrange)
-    bgFile = "/lustre/project/m2_jgu-w2w/ipaserver/ERA5/era5_const.nc"
-    bgroot = netCDF4.Dataset(os.path.realpath(bgFile), "r", format="NETCDF4", parallel=False)
-    bgMap = (readSecondary(bgroot, "lsm", 0, None, tgt_latrange, tgt_lonrange)>0.0 )*1.0
-    #contourMap = 1 - (bgMap - morphology.binary_erosion(bgMap))
-    contourMap = torch.from_numpy(1 - (morphology.binary_dilation(bgMap)-bgMap))
+    bgFile = args.lsm #"/lustre/project/m2_jgu-w2w/ipaserver/ERA5/era5_const.nc"
+    noBg = bgFile is None or (not os.path.isfile(args.lsm))
+    if(not noBg):
+        bgroot = netCDF4.Dataset(os.path.realpath(bgFile), "r", format="NETCDF4", parallel=False)
+        bgMap = (readSecondary(bgroot, "lsm", 0, None, tgt_latrange, tgt_lonrange)>0.0 )*1.0
+        #contourMap = 1 - (bgMap - morphology.binary_erosion(bgMap))
+        contourMap = torch.from_numpy(1 - (morphology.binary_dilation(bgMap)-bgMap))
+    else:
+        contourMap = 0
+        print("could not find File: ", args.lsm)
     writer = imageio.get_writer(outname+".gif", mode="I", duration=0.1)
     for idx, data in enumerate(tqdm(loader, desc ='eval'), 0):
         if idx<skip:
@@ -224,6 +230,13 @@ def performInference(model, loader, num_samples, parOpt, args):
         outpred[:,:,0] = (outpred[:,:,0]<=outputs[0,:,:,3])*outputs[0,:,:,3] + (outpred[:,:,0] > outputs[0,:,:,3])*outpred[:,:,0]
 
         outpred[:,:,2] = (outpred[:,:,2]<=outputs[0,:,:,3])*outputs[0,:,:,3] + (outpred[:,:,2] > outputs[0,:,:,3])*outpred[:,:,2]
+        # white -> no clear distinction
+        # get all Zeros
+        zeros = np.nonzero((np.sum(outpred, axis=-1)==0)*1.0)
+        # at all zero positins write a yellow line if the general Front is identified
+        outpred[zeros[0],zeros[1],0] = outputs[0,zeros[0],zeros[1],0]
+        outpred[zeros[0],zeros[1],1] = outputs[0,zeros[0],zeros[1],0]
+        #outpred[zeros[0],zeros[1],2] = outputs[0,zeros[0],zeros[1],0]
         
         # normalize it to 0..1
         mini, maxi = getValueRanges(args.calcVar.split("_")[0])

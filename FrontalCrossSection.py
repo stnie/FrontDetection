@@ -335,14 +335,14 @@ def readSecondary(rootgrp, var, time, level, latrange, lonrange):
 def getWindData(file, calcVar, latrange, lonrange):
     rootgrpwind = netCDF4.Dataset(os.path.realpath(file), "r", format="NETCDF4", parallel=False)
     if("_z" in calcVar):
-        udir = torch.from_numpy(readSecondary(rootgrpwind, "var131", 0, 9, latrange, lonrange))
-        vdir = torch.from_numpy(readSecondary(rootgrpwind, "var132", 0, 9, latrange, lonrange))
+        udir = readSecondary(rootgrpwind, "var131", 0, 9, latrange, lonrange)
+        vdir = readSecondary(rootgrpwind, "var132", 0, 9, latrange, lonrange)
     elif("_b" in calcVar or "_precip" in calcVar):
-        udir = torch.from_numpy(readSecondary(rootgrpwind, "u10", 0, None, latrange, lonrange))
-        vdir = torch.from_numpy(readSecondary(rootgrpwind, "v10", 0, None, latrange, lonrange))
+        udir = readSecondary(rootgrpwind, "u10", 0, None, latrange, lonrange)
+        vdir = readSecondary(rootgrpwind, "v10", 0, None, latrange, lonrange)
     elif("_ml" in calcVar):
-        udir = torch.from_numpy(readSecondary(rootgrpwind, "u", 0, -1, latrange, lonrange))
-        vdir = torch.from_numpy(readSecondary(rootgrpwind, "v", 0, -1, latrange, lonrange))
+        udir = readSecondary(rootgrpwind, "u", 0, -1, latrange, (lonrange[0]+180,lonrange[1]+180))
+        vdir = readSecondary(rootgrpwind, "v", 0, -1, latrange, (lonrange[0]+180,lonrange[1]+180))
     rootgrpwind.close()
     return udir, vdir
 
@@ -354,82 +354,100 @@ def getSecondaryData(file, calcVar, latrange, lonrange):
     # TODO-- update to the more general read method from the reader
     if(calcVar == "t_ml" or calcVar == "dt_ml"):
         grad = calcVar == "dt_ml"
-        var = readSecondary(rootgrp, "t", 0, -1, latrange, lonrange+180)
+        var = readSecondary(rootgrp, "t", 0, -1, latrange, (lonrange[0]+180,lonrange[1]+180))
     elif(calcVar == "q_ml" or calcVar == "dq_ml"):
         grad = calcVar == "dq_ml"
-        var = readSecondary(rootgrp, "q", 0, -1, latrange, lonrange+180)
+        var = readSecondary(rootgrp, "q", 0, -1, latrange, (lonrange[0]+180,lonrange[1]+180))
     elif(calcVar == "wind_ml"):
         # wind speed
-        u = readSecondary(rootgrp, "u", 0, -1, latrange, lonrange+180)
-        v = readSecondary(rootgrp, "v", 0, -1, latrange, lonrange+180)
-        var = torch.abs(torch.from_numpy(u+1j*v))
+        u = readSecondary(rootgrp, "u", 0, -1, latrange, (lonrange[0]+180,lonrange[1]+180))
+        v = readSecondary(rootgrp, "v", 0, -1, latrange, (lonrange[0]+180,lonrange[1]+180))
+        var = torch.abs(torch.from_numpy(u+1j*v)).cpu().numpy()
     elif(calcVar == "winddir_ml"):
         # wind speed
         grad = True
         orientation = True
-        u = readSecondary(rootgrp, "u", 0, -1, latrange, lonrange+180)
-        v = readSecondary(rootgrp, "v", 0, -1, latrange, lonrange+180)
-        var = torch.angle(torch.from_numpy(u+1j*v))
+        u = readSecondary(rootgrp, "u", 0, -1, latrange, (lonrange[0]+180,lonrange[1]+180))
+        v = readSecondary(rootgrp, "v", 0, -1, latrange, (lonrange[0]+180,lonrange[1]+180))
+        var = torch.angle(torch.from_numpy(u+1j*v)).cpu().numpy()
+    elif(calcVar == "cc_ml"):
+        # wind speed
+        var = readSecondary(rootgrp, "cc", 0, -23, latrange, (lonrange[0]+180,lonrange[1]+180))
 
     # Read 850 hPA instead
     elif(calcVar == "wind_z"):
         u = readSecondary(rootgrp, "var131", 0, 9, latrange, lonrange)
         v = readSecondary(rootgrp, "var132", 0, 9, latrange, lonrange)
-        var = torch.abs(torch.from_numpy(u+1j*v))    
+        var = torch.abs(torch.from_numpy(u+1j*v)).cpu().numpy()
     elif(calcVar == "ept_z" or calcVar == "dept_z" or calcVar == "tfp_z" or calcVar == "dtfp_z"):
-        grad = calcVar == "dept_z"
         t = units.Quantity(readSecondary(rootgrp, "var130", 0, 9, latrange, lonrange), "K")
         q = readSecondary(rootgrp, "var133", 0, 9, latrange, lonrange)
         p = units.Quantity(85000, "Pa")
         dewp = dewpoint_from_specific_humidity(p,t,q)
         ept = equivalent_potential_temperature(p,t,dewp)
-        var = torch.from_numpy(ept.magnitude)
+        var = ept.magnitude
     elif(calcVar == "t_z" or calcVar == "dt_z"):
-        grad = calcVar == "dt_z"
         t = readSecondary(rootgrp, "var130", 0, 9, latrange, lonrange)
-        var = torch.from_numpy(t)
+        var = t
         print(var.shape)
     elif(calcVar == "q_z" or calcVar == "dq_z"):
-        grad = calcVar == "dq_z"
         q = readSecondary(rootgrp, "var133", 0, 9, latrange, lonrange)
-        var = torch.from_numpy(q)
+        var = q
     elif(calcVar == "rq_z" or calcVar == "drq_z"):
-        grad = calcVar == "drq_z"
         t = units.Quantity(readSecondary(rootgrp, "var130", 0, 9, latrange, lonrange), "K")
         q = readSecondary(rootgrp, "var133", 0, 9, latrange, lonrange)
         p = units.Quantity(85000, "Pa")
         rq = relative_humidity_from_specific_humidity(p,t,q)
-        var = torch.from_numpy(rq.magnitude)
+        var = rq.magnitude
+    elif(calcVar == "oversat_z"):
+        t = units.Quantity(readSecondary(rootgrp, "var130", 0, 9, latrange, lonrange), "K")
+        q = readSecondary(rootgrp, "var133", 0, 9, latrange, lonrange)
+        p = units.Quantity(85000, "Pa")
+        rq = relative_humidity_from_specific_humidity(p,t,q)
+        var = (rq.magnitude>1.0)*1.0
     elif(calcVar == "rqi_z" or calcVar == "drqi_z"):
-        grad = calcVar == "drqi_z"
         t = units.Quantity(readSecondary(rootgrp, "var130", 0, 3, latrange, lonrange), "K")
         q = readSecondary(rootgrp, "var133", 0, 3, latrange, lonrange)
         p = units.Quantity(30000, "Pa")
         rq = rhi(p.magnitude/100,q, t.magnitude)
-        var = ((torch.from_numpy(rq)>1.0) * (t.magnitude>200) * (t.magnitude < 233))*1.0
+        var = (rq * (t.magnitude>200) * (t.magnitude < 233))*1.0
+    elif(calcVar == "iceoversat_z"):
+        t = units.Quantity(readSecondary(rootgrp, "var130", 0, 3, latrange, lonrange), "K")
+        q = readSecondary(rootgrp, "var133", 0, 3, latrange, lonrange)
+        p = units.Quantity(30000, "Pa")
+        rq = rhi(p.magnitude/100,q, t.magnitude)
+        var = ((rq>1.0) * (t.magnitude>200) * (t.magnitude < 233))*1.0
     # These should work, but are not tested!
     # 10m winds
     elif(calcVar == "winddir_b"):
-        grad = True
-        orientation = True
         u10dir = readSecondary(rootgrp, "u10", 0, None, latrange, lonrange)
         v10dir = readSecondary(rootgrp, "v10", 0, None, latrange, lonrange)
         wind = torch.from_numpy(u10dir+1j*v10dir)
-        var = torch.angle(wind)
+        var = torch.angle(wind).cpu().numpy()
     elif(calcVar == "wind_b"):
         u10dir = readSecondary(rootgrp, "u10", 0, None, latrange, lonrange)
         v10dir = readSecondary(rootgrp, "v10", 0, None, latrange, lonrange)
         wind = torch.from_numpy(u10dir+1j*v10dir)
-        var = torch.abs(wind)
+        var = torch.abs(wind).cpu().numpy()
     elif(calcVar == "sp_b"):
         var = readSecondary(rootgrp, "sp", 0, None, latrange, lonrange)
+    elif(calcVar == "lcc_b"):
+        var = readSecondary(rootgrp, "lcc", 0, None, latrange, lonrange)
+    elif(calcVar == "mcc_b"):
+        var = readSecondary(rootgrp, "mcc", 0, None, latrange, lonrange)
+    elif(calcVar == "hcc_b"):
+        var = readSecondary(rootgrp, "hcc", 0, None, latrange, lonrange)
     # precipitation
     elif(calcVar == "tp_precip"):
+        prec = readSecondary(rootgrp, "tp", 0, None, latrange, lonrange)
+        var = prec
+    elif(calcVar == "extremetp_precip"):
         prec = readSecondary(rootgrp, "tp", 0, None, latrange, lonrange)
         file2 = "/lustre/project/m2_jgu-binaryhpc/Front_Detection_Data/PercentileData/Precipitation_tp_99_percentile.nc"
         rootgrp2 = netCDF4.Dataset(os.path.realpath(file2), "r", format="NETCDF4", parallel=False)
         precoff = readSecondary(rootgrp2, "tp", 0, None, latrange, lonrange)
-        var = torch.from_numpy(prec>precoff)*1.0
+        rootgrp2.close()
+        var = (prec>precoff)*1.0
     rootgrp.close()
     return var
 
@@ -569,7 +587,7 @@ def performInference(model, loader, num_samples, parOpt, args):
                     distImg = distance_transform_edt(1-(outputs[:,:,channel]), return_distances = True, return_indices = False) <= 3
                     frontImage[:,:,channel] = frontImage[:,:,channel]*distImg
         
-        curravg, currsqavg, currnumPoints = getValAlongNormal(frontImage, var.cpu().numpy(), udir.cpu().numpy(), vdir.cpu().numpy(), length, border, grad, orientation, (latoff,lonoff))
+        curravg, currsqavg, currnumPoints = getValAlongNormal(frontImage, var, udir, vdir, length, border, grad, orientation, (latoff,lonoff))
         avgVar += curravg
         sqavgVar += currsqavg
         numPoints += currnumPoints
