@@ -545,7 +545,6 @@ def parseArguments():
     parser.add_argument('--drawImages', action = 'store_true', help = 'draw results of each iteration')
     parser.add_argument('--climatology', action='store_true', default = False, help = 'Create a Climatology')
     parser.add_argument('--writeOut', action='store_true', default = False, help = 'Write all Results to File')
-    parser.add_argument('--clip', action='store_true', default=False, help = 'Create Gif from outputs')
     args = parser.parse_args()
     
     return args
