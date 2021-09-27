@@ -173,17 +173,17 @@ def performInference(model, loader, num_samples, parOpt, args):
     lonoff= (data_set.mapTypes[mapType][2][0]+180)/data_set.mapTypes[mapType][3][1]
     tgt_latrange, tgt_lonrange = getTgtRange(data_set, mapType)
     print("offsets for the corresponding mapType, to estimate distance in km:", tgt_latrange, tgt_lonrange)
-    bgFile = args.lsm #"/lustre/project/m2_jgu-w2w/ipaserver/ERA5/era5_const.nc"
+    bgFile = args.lsm
     noBg = bgFile is None or (not os.path.isfile(args.lsm))
     if(not noBg):
         bgroot = netCDF4.Dataset(os.path.realpath(bgFile), "r", format="NETCDF4", parallel=False)
         bgMap = (readSecondary(bgroot, "lsm", 0, None, tgt_latrange, tgt_lonrange)>0.0 )*1.0
-        #contourMap = 1 - (bgMap - morphology.binary_erosion(bgMap))
         contourMap = torch.from_numpy(1 - (morphology.binary_dilation(bgMap)-bgMap))
     else:
         contourMap = 0
         print("could not find File: ", args.lsm)
     writer = imageio.get_writer(outname+".gif", mode="I", duration=0.1)
+    temporalList = np.zeros((num_samples, 5, 8, 8))
     for idx, data in enumerate(tqdm(loader, desc ='eval'), 0):
         if idx<skip:
             continue
@@ -217,7 +217,6 @@ def performInference(model, loader, num_samples, parOpt, args):
         var = getSecondaryData(newFile, args.calcVar, tgt_latrange, tgt_lonrange)
         
         # reshuffle input for display
-
         #switch channels for usual output colors
         outpred = np.zeros((outputs.shape[1],outputs.shape[2],3))
         # red -> warm
@@ -251,7 +250,9 @@ def performInference(model, loader, num_samples, parOpt, args):
         
         # add the image to the gif
         writer.append_data((mygifImg[border:-border, border:-border]*255).astype(np.uint8))
-    
+    # close the writer to ensure that mp4 creation has the complete data available
+    writer.close()
+    temporalList.tofile("tempList.bin")
     VideoFileClip(outname+".gif").write_videofile(outname+".mp4")
     return
 

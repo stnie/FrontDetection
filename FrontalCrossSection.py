@@ -443,7 +443,7 @@ def getSecondaryData(file, calcVar, latrange, lonrange):
         var = prec
     elif(calcVar == "extremetp_precip"):
         prec = readSecondary(rootgrp, "tp", 0, None, latrange, lonrange)
-        file2 = "/lustre/project/m2_jgu-binaryhpc/Front_Detection_Data/PercentileData/Precipitation_tp_99_percentile.nc"
+        file2 = "tpThresh.nc"
         rootgrp2 = netCDF4.Dataset(os.path.realpath(file2), "r", format="NETCDF4", parallel=False)
         precoff = readSecondary(rootgrp2, "tp", 0, None, latrange, lonrange)
         rootgrp2.close()
@@ -527,9 +527,12 @@ def performInference(model, loader, num_samples, parOpt, args):
             continue
         if(idx == num_samples+skip):
             break
-        inputs, labels, filename = data
-        inputs = inputs.to(device = parOpt.device, non_blocking=False)
-        labels = labels.to(device = parOpt.device, non_blocking=False)
+        if(not torch.cuda.is_available()):
+            inputs, labels, filename = data.data, data.labels, data.filenames
+        else:
+            inputs, labels, filename = data
+            inputs = inputs.to(device = parOpt.device, non_blocking=False)
+            labels = labels.to(device = parOpt.device, non_blocking=False)
         
         # remove all short labels (# 1 is a dummy value, evaluation will skip 40 pixel anyways)
         labels = filterFronts(labels.cpu().numpy(), 1)

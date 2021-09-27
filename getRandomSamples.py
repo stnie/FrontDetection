@@ -117,7 +117,11 @@ def performInference(loader, num_samples, parOpt, args):
             if(idx == num_samples+skip):
                 exit(1)
                 break
-            inputs, labels, filename = data.data.cpu().numpy(), data.labels, data.filenames
+            if(not torch.cuda.is_available()):
+                inputs, labels, filename = data.data, data.labels, data.filenames
+            else:
+                inputs, labels, filename = data.data.cpu().numpy(), data.labels, data.filenames
+            
             inputs = inputs[:,border:-border,border:-border,:]
 
             front = inputs[0]

@@ -145,7 +145,10 @@ def performInference(loader, num_samples, parOpt, args):
                 continue
             if(idx == num_samples+skip):
                 break
-            inputs, labels, filename = data.data.cpu().numpy(), data.labels, data.filenames
+            if(not torch.cuda.is_available()):
+                inputs, labels, filename = data.data, data.labels, data.filenames
+            else:
+                inputs, labels, filename = data.data.cpu().numpy(), data.labels, data.filenames
 
             # skip infer if wrong month is drawn
             year,month,day,hour = filename[0][no:no+4],filename[0][no+4:no+6],filename[0][no+6:no+8],filename[0][no+9:no+11]

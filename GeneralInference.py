@@ -270,7 +270,7 @@ class CSIEvaluator():
             mypredComp = morphology.binary_dilation(prediction[0,:,:]>0, selem = np.ones((3,3)))
             predLabelComp = measure.label(mypredComp, background = 0)*mythinpred
             predLabel = predLabelComp[evCrop[0]:-evCrop[0], evCrop[1]:-evCrop[1]]
-            mypred = mypredComp[evCrop[0]:-evCrop[0], evCrop[1]:-evCrop[1]]
+            #mypred = mypredComp[evCrop[0]:-evCrop[0], evCrop[1]:-evCrop[1]]
         else:
             mypredComp = morphology.binary_dilation(prediction[0,:,:]>0, selem = np.ones((3,3)))
             predLabelComp = measure.label(mypredComp, background = 0)*mythinpred
@@ -284,7 +284,7 @@ class CSIEvaluator():
             #imageLabel = measure.label(myimg,background=0)*mythinimg[evCrop[0]:-evCrop[0], evCrop[1]:-evCrop[1]]
             myimgComp = morphology.binary_dilation(image[0,:,:]>0, selem = np.ones((3,3)))
             imageLabelComp = measure.label(myimgComp, background = 0)*mythinimg
-            myimg = myimgComp[evCrop[0]:-evCrop[0], evCrop[1]:-evCrop[1]]
+            #myimg = myimgComp[evCrop[0]:-evCrop[0], evCrop[1]:-evCrop[1]]
             imageLabel = imageLabelComp[evCrop[0]:-evCrop[0], evCrop[1]:-evCrop[1]]
         else:
             myimgComp = morphology.binary_dilation(image[0,:,:]>0, selem = np.ones((3,3)))
@@ -424,8 +424,8 @@ class ClimatologyEvaluator():
             self.saveClimatology(self.totalImage[:,:,frontalType], num_samples, self.outname, typeToString[frontalType])
     
     def saveClimatology(self, climatology, num_samples, outfold, typen):
-        imsave(os.path.join(outfold, typen+"climatology.png", climatology/(num_samples)))
-        imsave(os.path.join(outfold, typen+"climatology_unnormalized.png", climatology))
+        imsave(os.path.join(outfold, typen+"climatology.png"), climatology/(num_samples))
+        imsave(os.path.join(outfold, typen+"climatology_unnormalized.png"), climatology)
         climatology = climatology.astype(np.float32)
         climatology.tofile(os.path.join(outfold, typen+"climatology.bin"))
 
@@ -465,16 +465,21 @@ class DrawImageEvaluator():
         # save the prediction
         #switch channels for usual output colors
         outpred = torch.zeros_like(label)
-        # red -> warm
-        outpred[0,:,:,0] = fronts[0,:,:,1]
-        # green -> stationary
-        outpred[0,:,:,1] = fronts[0,:,:,4]
-        # blue -> cold
-        outpred[0,:,:,2] = fronts[0,:,:,2]
-        # pink -> occlusion
-        outpred[0,:,:,0] = (outpred[0,:,:,0]<=fronts[0,:,:,3])*fronts[0,:,:,3] + (outpred[0,:,:,0] > fronts[0,:,:,3])*outpred[0,:,:,0]
+        if(args.ETH):
+            outpred[0,:,:,0] = fronts[0,:,:,0]
+            outpred[0,:,:,1] = fronts[0,:,:,0]
+            outpred[0,:,:,2] = fronts[0,:,:,0]
+        else:
+            # red -> warm
+            outpred[0,:,:,0] = fronts[0,:,:,1]
+            # green -> stationary
+            outpred[0,:,:,1] = fronts[0,:,:,4]
+            # blue -> cold
+            outpred[0,:,:,2] = fronts[0,:,:,2]
+            # pink -> occlusion
+            outpred[0,:,:,0] = (outpred[0,:,:,0]<=fronts[0,:,:,3])*fronts[0,:,:,3] + (outpred[0,:,:,0] > fronts[0,:,:,3])*outpred[0,:,:,0]
 
-        outpred[0,:,:,2] = (outpred[0,:,:,2]<=fronts[0,:,:,3])*fronts[0,:,:,3] + (outpred[0,:,:,2] > fronts[0,:,:,3])*outpred[0,:,:,2]
+            outpred[0,:,:,2] = (outpred[0,:,:,2]<=fronts[0,:,:,3])*fronts[0,:,:,3] + (outpred[0,:,:,2] > fronts[0,:,:,3])*outpred[0,:,:,2]
 
         imsave(os.path.join(self.outname, filename+"_prediction.png"), (outpred.cpu().numpy()[0,20:-20,20:-20,:-1]*255).astype(np.uint8))
         
@@ -629,14 +634,13 @@ def setupDataset(args):
 
 def performInference(model, loader, num_samples, evaluator, parOpt, args):
     for idx, data in enumerate(tqdm(loader, desc ='eval'), 0):
-        if(idx < (31+29+31+30+31+30+31+31)*4):
-            continue
-        if(idx >= (31+29+31+30+31+30+31+31+30)*4):
-            break
         if(idx == num_samples):
             break
-        inputs, labels, filename = data
-        inputs = inputs.to(device = parOpt.device, non_blocking=False)
+        if(not torch.cuda.is_available()):
+            inputs, labels, filename = data.data, data.labels, data.filenames
+        else:
+            inputs, labels, filename = data
+            inputs = inputs.to(device = parOpt.device, non_blocking=False)
         # Create Results
         if(args.ETH):
             smoutputs = inputs.permute(0,2,3,1)
@@ -648,7 +652,7 @@ def performInference(model, loader, num_samples, evaluator, parOpt, args):
             smoutputs = inferResults(model, inputs, args)
         
         # no labels necessary
-        if(args.climatology or args.writeOut or args.clip):
+        if(args.climatology or args.writeOut):
             evaluator.evaluate(None, smoutputs.cpu(), filename)
         # labels are necessary
         else:
