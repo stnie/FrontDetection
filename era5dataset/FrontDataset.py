@@ -90,6 +90,7 @@ class WeatherFrontDataset(Dataset):
             self.fileList = []
             for fold in os.listdir(self.data_dir):
                 for filen in os.listdir(os.path.join(self.data_dir, fold)):
+                    # This is mostly due to restrictions in our data folds.
                     if("B20" in filen):
                         continue
                     if(self.removePrefix == 8 and not ( "_00" in filen or "_06" in filen or "_12" in filen or "_18" in filen)):

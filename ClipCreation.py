@@ -27,6 +27,7 @@ import matplotlib.pyplot as plt
 # ~ 45% validation loss 
 
 from skimage import measure, morphology
+from skimage.io import imsave
 from InferOutputs import inferResults, setupDataLoader, setupDevice, setupModel
 
 
@@ -39,10 +40,12 @@ import imageio
 from moviepy.editor import VideoFileClip
 
 
+
 def parseArguments():
     parser = argparse.ArgumentParser(description='FrontNet')
     parser.add_argument('--net', help='path no net')
     parser.add_argument('--data', help='path to folder containing data')
+    parser.add_argument('--label', type = str, default = None, help='path to folder containing label')
     parser.add_argument('--outname', help='name of the output')
     parser.add_argument('--disable-cuda', action='store_true', help='Disable CUDA')
     parser.add_argument('--device', type = int, default = 0, help = "number of device to use")
@@ -61,6 +64,7 @@ def parseArguments():
     parser.add_argument('--alpha', type = float, default = 0, help='weight of constant background compared background variable. [0 to 1]')
     parser.add_argument('--rgb', nargs=3, type = int, help='rgb weights of for the background variable [0..255] x 3')
     parser.add_argument('--lsm', default = None, help='path to land-sea-mask netCDF file')
+    parser.add_argument('--make_img', default = False, action='store_true', help='Create a single image instead')
     args = parser.parse_args()
 
     args.binary = args.classes == 1
@@ -76,19 +80,19 @@ def setupDataset(args):
         if(args.NWS):
             mapTypes = {"hires": ("hires", (90, -89.75), (-180, 180), (-0.25,0.25)) }
     elif(args.preCalc and not args.fullsize):
-        # add another 5 degree to the input, such that we can savely extract lines from fronts at the corner of evaluation
-        cropsize = (55*4,100*4)
-        mapTypes = {"NA": ("NA", (75+5,30.25-5), (-50-5,40+5), (-stepsize, stepsize), None)}
+        # add 5 degree to the input, such that we can savely extract lines from fronts at the corner of evaluation
+        cropsize = (45*4,90*4)
+        mapTypes = {"NA": ("NA", (75,30.25), (-50,40), (-stepsize, stepsize), None)}
         if(args.NWS):
-            cropsize = (55*4, 95*4) 
-            mapTypes = {"hires": ("hires", (75+5, 30.25-5), (-140-5, -55+5), (-stepsize,stepsize), None) }
+            cropsize = (45*4, 85*4) 
+            mapTypes = {"hires": ("hires", (75, 30.25), (-140, -55), (-stepsize,stepsize), None) }
     else:
-        # add another 5 degree to the input, such that we can savely extract lines from fronts at the corner of evaluation
-        cropsize = (56*4,100*4)
-        mapTypes = {"NA": ("NA", (76+5,30.25-5), (-50-5,40+5), (-stepsize, stepsize), None)}
+        # add 5 degree to the input, such that we can savely extract lines from fronts at the corner of evaluation
+        cropsize = (46*4,90*4)
+        mapTypes = {"NA": ("NA", (76,30.25), (-50,40), (-stepsize, stepsize), None)}
         if(args.NWS):
-            cropsize = (56*4, 96*4) 
-            mapTypes = {"hires": ("hires", (76+5, 30.25-5), (-141-5, -55+5), (-stepsize,stepsize), None) }
+            cropsize = (46*4, 86*4) 
+            mapTypes = {"hires": ("hires", (76, 30.25), (-141, -55), (-stepsize,stepsize), None) }
     
     myLevelRange = np.arange(105,138,4)
 
@@ -114,8 +118,8 @@ def setupDataset(args):
 
     myEraExtractor = DerivativeFlippingAwareEraExtractor(variables, [], [], 0.0, 0 , 1, normType = normType, sharedObj = None)
 
-    subfolds = (True, False)
-    remPref = 3
+    subfolds = (False, False)
+    remPref = 0
 
     if(ETH):
         myEraExtractor = ETHEraExtractor()
@@ -128,7 +132,7 @@ def setupDataset(args):
     
 
     # Create Dataset
-    data_set = WeatherFrontDataset(data_dir=data_fold, mapTypes = mapTypes, levelRange = myLevelRange, transform=myTransform, outSize=cropsize, labelThickness= labelThickness, label_extractor = myLabelExtractor, era_extractor = myEraExtractor, has_subfolds = subfolds, asCoords = False, removePrefix = remPref)
+    data_set = WeatherFrontDataset(data_dir=data_fold, label_dir = args.label, mapTypes = mapTypes, levelRange = myLevelRange, transform=myTransform, outSize=cropsize, labelThickness= labelThickness, label_extractor = myLabelExtractor, era_extractor = myEraExtractor, has_subfolds = subfolds, asCoords = False, removePrefix = remPref)
     return data_set
 
 
@@ -149,15 +153,55 @@ def readSecondary(rootgrp, var, time, level, latrange, lonrange):
     return vals
 
 
+def CreateImageWithBackground(data, variableBg, surfaceBg, calcVar, alpha, rgb, off=1):
+    #switch channels for usual output colors
+    outpred = np.zeros((data.shape[0],data.shape[1],3))
+    # red -> warm
+    outpred[:,:,0] = data[:,:,off]
+    # green -> stationary
+    outpred[:,:,1] = data[:,:,3+off]
+    # blue -> cold
+    outpred[:,:,2] = data[:,:,1+off]
+    # pink -> occlusion
+    outpred[:,:,0] = (outpred[:,:,0]<=data[:,:,2+off])*data[:,:,2+off] + (outpred[:,:,0] > data[:,:,2+off])*outpred[:,:,0]
+
+    outpred[:,:,2] = (outpred[:,:,2]<=data[:,:,2+off])*data[:,:,2+off] + (outpred[:,:,2] > data[:,:,2+off])*outpred[:,:,2]
+    # white -> no clear distinction
+    # get all Zeros
+    zeros = np.nonzero((np.sum(outpred, axis=-1)==0)*1.0)
+    # at all zero positions write a yellow line if the general Front is identified
+    outpred[zeros[0],zeros[1],0] = data[zeros[0],zeros[1],0]
+    outpred[zeros[0],zeros[1],1] = data[zeros[0],zeros[1],0]
+    #outpred[zeros[0],zeros[1],2] = outputs[0,zeros[0],zeros[1],0]
+    
+    # normalize it to 0..1
+    mini, maxi = getValueRanges(calcVar)
+    variableBg = (variableBg - mini) / (maxi-mini)
+    mygifImg = outpred
+    sumimg = np.sum(mygifImg, axis = -1) < 0.5
+    # if a front is present => print the front, else print the background variable
+    mygifImg[:,:,0] = (alpha*surfaceBg + (1-alpha) * variableBg * (rgb[0]/255.0)) * sumimg + mygifImg[:,:,0] * (~sumimg) 
+    mygifImg[:,:,1] = (alpha*surfaceBg + (1-alpha) * variableBg * (rgb[1]/255.0)) * sumimg + mygifImg[:,:,1] * (~sumimg)
+    mygifImg[:,:,2] = (alpha*surfaceBg + (1-alpha) * variableBg * (rgb[2]/255.0)) * sumimg + mygifImg[:,:,2] * (~sumimg)
+    return mygifImg
+
+
 def performInference(model, loader, num_samples, parOpt, args):
     
     outfold = os.path.join("Clips", args.outname)
     if not os.path.isdir(outfold):
         os.mkdir(outfold)
     outname = os.path.join(outfold, "clip")
-    out_channels = 4
     border = 20
+    months = [0,31, 29, 31,30, 31,30,31,31,30,31,30,31]
+    # offset in days until start of month
+    cumMonths = np.cumsum(months)
     skip = 0
+    if(args.make_img):
+        # to get september for image output
+        skip = 4*(cumMonths[8]+13)-1
+        if args.NWS:
+            skip = 8*(cumMonths[8]+13)
 
     # Path to Secondary File
     secondaryPath = args.secPath
@@ -169,8 +213,6 @@ def performInference(model, loader, num_samples, parOpt, args):
     no = data_set.removePrefix
     # Get Range
     mapType = "hires" if args.NWS else "NA"
-    latoff= (data_set.mapTypes[mapType][1][0]-90)/data_set.mapTypes[mapType][3][0]
-    lonoff= (data_set.mapTypes[mapType][2][0]+180)/data_set.mapTypes[mapType][3][1]
     tgt_latrange, tgt_lonrange = getTgtRange(data_set, mapType)
     print("offsets for the corresponding mapType, to estimate distance in km:", tgt_latrange, tgt_lonrange)
     bgFile = args.lsm
@@ -182,8 +224,10 @@ def performInference(model, loader, num_samples, parOpt, args):
     else:
         contourMap = 0
         print("could not find File: ", args.lsm)
-    writer = imageio.get_writer(outname+".gif", mode="I", duration=0.1)
-    temporalList = np.zeros((num_samples, 5, 8, 8))
+        print("Continue without background image")
+    if(not args.make_img):
+        # If no image is to be made => a video should be made instead => Use gif writer 
+        writer = imageio.get_writer(outname+".gif", mode="I", duration=0.1)
     for idx, data in enumerate(tqdm(loader, desc ='eval'), 0):
         if idx<skip:
             continue
@@ -217,43 +261,29 @@ def performInference(model, loader, num_samples, parOpt, args):
         var = getSecondaryData(newFile, args.calcVar, tgt_latrange, tgt_lonrange)
         
         # reshuffle input for display
-        #switch channels for usual output colors
-        outpred = np.zeros((outputs.shape[1],outputs.shape[2],3))
-        # red -> warm
-        outpred[:,:,0] = outputs[0,:,:,1]
-        # green -> stationary
-        outpred[:,:,1] = outputs[0,:,:,4]
-        # blue -> cold
-        outpred[:,:,2] = outputs[0,:,:,2]
-        # pink -> occlusion
-        outpred[:,:,0] = (outpred[:,:,0]<=outputs[0,:,:,3])*outputs[0,:,:,3] + (outpred[:,:,0] > outputs[0,:,:,3])*outpred[:,:,0]
-
-        outpred[:,:,2] = (outpred[:,:,2]<=outputs[0,:,:,3])*outputs[0,:,:,3] + (outpred[:,:,2] > outputs[0,:,:,3])*outpred[:,:,2]
-        # white -> no clear distinction
-        # get all Zeros
-        zeros = np.nonzero((np.sum(outpred, axis=-1)==0)*1.0)
-        # at all zero positins write a yellow line if the general Front is identified
-        outpred[zeros[0],zeros[1],0] = outputs[0,zeros[0],zeros[1],0]
-        outpred[zeros[0],zeros[1],1] = outputs[0,zeros[0],zeros[1],0]
-        #outpred[zeros[0],zeros[1],2] = outputs[0,zeros[0],zeros[1],0]
-        
-        # normalize it to 0..1
-        mini, maxi = getValueRanges(args.calcVar.split("_")[0])
-        var = (var - mini) / (maxi-mini)
-        mygifImg = outpred
-        sumimg = np.sum(mygifImg, axis = -1) < 0.5
-        # if a front is present => print the front, else print the background variable
-        alpha = args.alpha
-        mygifImg[:,:,0] = (alpha*contourMap + (1-alpha) * var * (args.rgb[0]/255.0)) * sumimg + mygifImg[:,:,0] * (~sumimg) 
-        mygifImg[:,:,1] = (alpha*contourMap + (1-alpha) * var * (args.rgb[1]/255.0)) * sumimg + mygifImg[:,:,1] * (~sumimg)
-        mygifImg[:,:,2] = (alpha*contourMap + (1-alpha) * var * (args.rgb[2]/255.0)) * sumimg + mygifImg[:,:,2] * (~sumimg)
-        
-        # add the image to the gif
-        writer.append_data((mygifImg[border:-border, border:-border]*255).astype(np.uint8))
-    # close the writer to ensure that mp4 creation has the complete data available
-    writer.close()
-    temporalList.tofile("tempList.bin")
-    VideoFileClip(outname+".gif").write_videofile(outname+".mp4")
+        mygifImg = CreateImageWithBackground(outputs[0], var, contourMap, args.calcVar.split("_")[0], args.alpha, args.rgb)
+        make_image=args.make_img
+        if(make_image):
+            mygifLab = CreateImageWithBackground(labels[0].cpu().numpy(), var, contourMap, args.calcVar.split("_")[0], args.alpha, args.rgb,0)
+            # Create the diff img
+            mydiffIn = np.zeros_like(labels[0].cpu().numpy())
+            mydiffIn[:,:,0] = np.max(labels[0].cpu().numpy(), axis=-1)
+            mydiffIn[:,:,3] = np.max(outputs[0], axis=-1)
+            # If detection and label overlap, show detection (to prevent color mixture)
+            tmp = np.nonzero(mydiffIn[:,:,3])
+            mydiffIn[tmp[0],tmp[1],0] = 0
+            mygifDiff = CreateImageWithBackground(mydiffIn, var, contourMap, args.calcVar.split("_")[0], args.alpha, args.rgb,0)
+            imsave(os.path.join(outfold,filename[0]+"diff.png"), (mygifDiff[border:-border, border:-border]*255).astype(np.uint8))
+            imsave(os.path.join(outfold,filename[0]+"img.png"), (mygifImg[border:-border, border:-border]*255).astype(np.uint8))
+            imsave(os.path.join(outfold,filename[0]+"lab.png"), (mygifLab[border:-border, border:-border]*255).astype(np.uint8))
+        else:
+            # add the image to the gif
+            writer.append_data((mygifImg[border:-border, border:-border]*255).astype(np.uint8))
+    if(not args.make_img):
+        # close the writer to ensure that mp4 creation has the complete data available
+        writer.close()
+        # TODO -- safely remove the gif after mp4 creation.
+        VideoFileClip(outname+".gif").write_videofile(outname+".mp4")
     return
 
 
@@ -278,6 +308,8 @@ if __name__ == "__main__":
 
     sample_data = data_set[0]
     data_dims = sample_data[0].shape
+    #print(data_dims)
+    #imsave("tmp2.png", sample_data[0][0,:,:])
 
 
     # Data information

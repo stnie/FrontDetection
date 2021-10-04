@@ -100,15 +100,22 @@ def plotBoxPlt(x_event, y_event, y_event_div, num_bins, region, filter, savename
         savename += "_{}".format(filt)
     plt.legend(["Identity", "1st percentile", "99th percentile"])
     front_type = savename.split("/")[-1].split("_")[1]
+    if(front_type == "warm"):
+        indexation = "(b)"
+    if(front_type == "cold"):
+        indexation = "(c)"
     if(front_type == "stnry"):
         front_type = "stationary fronts"
+        indexation = "(e)"
     elif(front_type == "occ"):
+        indexation = "(d)"
         front_type = "occlusions"
     elif(front_type == "all"):
         front_type = "any front"
+        indexation = "(a)"
     else:
         front_type += " fronts"
-    plt.title("Proportion of Extreme Precipitation Events associated with "+front_type)
+    plt.title(indexation+" Proportion of Extreme Precipitation Events associated with "+front_type)
     fig.savefig(savename+".png")
     plt.close(fig)
 
@@ -260,13 +267,21 @@ def saveImgRegion(image, region, filter, savename, base_low = None, base_up = No
     cax_height = 0.05
     pos_cax = fig.add_axes([pos_x,pos_y,cax_width,cax_height])
     cb = fig.colorbar(im, orientation="horizontal", ticks=np.arange(0,11*tickstep,tickstep), cax = pos_cax)
+
     front_type = savename.split("/")[-1].split("_")[-2]
+    if(front_type == "warm"):
+        indexation = "(b)"
+    if(front_type == "cold"):
+        indexation = "(c)"
     if(front_type == "stnry"):
         front_type = "stationary fronts"
+        indexation = "(e)"
     elif(front_type == "occ"):
+        indexation = "(d)"
         front_type = "occlusions"
     elif(front_type == "all"):
         front_type = "any front"
+        indexation = "(a)"
     else:
         front_type += " fronts"
     base_type = "Extreme Precipitation"
@@ -274,7 +289,7 @@ def saveImgRegion(image, region, filter, savename, base_low = None, base_up = No
         tmp = base_type
         base_type = front_type
         front_type = tmp
-    ax.set_title("Proportion of {} Associated with {}".format(base_type, front_type))
+    ax.set_title("{} Proportion of {} Associated with {}".format(indexation, base_type, front_type))
     
     fig.savefig(savename+".png")
     plt.close(fig)

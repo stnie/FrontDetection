@@ -83,6 +83,7 @@ class CDFReader:
             variables = np.asarray(rootgrp)
 
         # Set the local values first
+        # TODO -- Currently it only works for files with Longitudes [-180 to 180]. Update to work for arbitray Longitudes in File
         local_latrange, local_lonrange, local_levelrange, local_warpmask = getLocalValues(rootgrp, latrange, lonrange, levelrange, lat_step, lon_step, warpmask)
        
         # Read the values from the file
