@@ -237,7 +237,7 @@ def performInference(model, loader, num_samples, parOpt, args):
             inputs, labels, filename = data.data, data.labels, data.filenames
         else:
             inputs, labels, filename = data
-            inputs = inputs.to(device = parOpt.device, non_blocking=False)
+            inputs = inputs.cpu().numpy()
         
         # remove all short labels (# 1 is a dummy value, evaluation will skip 40 pixel anyways)
         if(args.ETH):
@@ -246,8 +246,7 @@ def performInference(model, loader, num_samples, parOpt, args):
             outputs = (inputs*1).cpu().numpy()
             print(outputs.shape)
         else:
-            tgtIn = torch.cat((inputs[:,:6*9], inputs[:,-1:]), dim = 1)
-            outputs = inferResults(model, tgtIn, args)
+            outputs = inferResults(model, inputs, args)
         
 
         # Prepare the secondary data
@@ -313,7 +312,7 @@ if __name__ == "__main__":
 
 
     # Data information
-    in_channels = data_dims[0]-3*9
+    in_channels = data_dims[0]
     levels = data_dims[0]
     latRes = data_dims[1]
     lonRes = data_dims[2]
@@ -321,6 +320,7 @@ if __name__ == "__main__":
     out_channels = args.classes
     if(args.binary):
         out_channels = 1
+    args.out_channels = out_channels
     
 
     #Print info

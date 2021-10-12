@@ -65,7 +65,7 @@ class CSIEvaluator():
         westOff = int(tgtlons[0]+180)
         self.offset = (northOff , westOff)
         self.avgCSI = np.zeros((5,7))
-        # The input is 5 degree larger than the evaluation area, to reduce any loss of mathches caused by cropping
+        # The comparison are is larger than the evaluation area, to reduce any loss of mathches caused by cropping
         self.evCrop = (int((tgtlats[0]-evlats[0])*pixPerDeg), int((evlons[0]-tgtlons[0])*pixPerDeg))
         self.inlats = inlats
         self.inlons = inlons
@@ -707,6 +707,12 @@ if __name__ == "__main__":
     if(not (args.ETH or args.preCalc)):
         model = setupModel(args, parOpt)
     
+
+    # We define the evaluation and comparison region of the CSI evaluation
+    # For infered data, these are defined relative to the input dimension
+    # For precalculated data the algorithm assumes 720x1440 spatial resolution of the input
+    # Using hard coded values to define the evaluation regions
+    # TODO-- currently latitudes are inclusive. Update this to make latitudes work like the general range operators
     evMapType = "hires" if args.NWS else "NA"
     info = data_set.mapTypes[evMapType]
     inlats = np.array(info[1])

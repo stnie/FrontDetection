@@ -542,7 +542,8 @@ def performInference(model, loader, num_samples, parOpt, args):
             outputs = (inputs*1).cpu().numpy()
             print(outputs.shape)
         else:
-            outputs = inferResults(model, inputs, args)
+            args.border = 5
+            outputs = inferResults(model, inputs, args).cpu().numpy()
                 
         year,month,day,hour = getDate(filename[0], no)
 
@@ -624,7 +625,7 @@ if __name__ == "__main__":
 
 
     # Data information
-    in_channels = data_dims[0]-3*9
+    in_channels = data_dims[0]
     levels = data_dims[0]
     latRes = data_dims[1]
     lonRes = data_dims[2]
@@ -632,6 +633,7 @@ if __name__ == "__main__":
     out_channels = args.classes
     if(args.binary):
         out_channels = 1
+    args.out_channels = out_channels
     
 
     #Print info

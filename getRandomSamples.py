@@ -26,32 +26,14 @@ from InferOutputs import setupDataLoader
 
 def parseArguments():
     parser = argparse.ArgumentParser(description='FrontNet')
-    parser.add_argument('--data', type = str, help = 'path to fronts either fold or file')
-    parser.add_argument('--mask', type = str, help = 'path to mask netCDF4 file for extreme events')
+    parser.add_argument('--data', type = str, help = 'path to fronts either folder of preCalculated (unwidened!) network results or a file containing the preprocessed (widened!) results!')
+    parser.add_argument('--mask', type = str, help = 'path to mask netCDF4 file for extreme events (a single File with containing all necessary timestamps!)')
     parser.add_argument('--heightMap', type=str, help = 'path to netCDF4 containing height map as geopotential')
     parser.add_argument("--season", type = str, default = "", help = "which season to evaluate for (djf, mam, jja, son), default no season")
-    parser.add_argument('--calcVar', type = str, default = "precip", help = 'which variable to measure along the cross section')
-    parser.add_argument('--num_samples', type = int, default = -1, help='number of samples to infere from the dataset')
+    parser.add_argument('--num_samples', type = int, default = -1, help='number of samples to infer from the dataset')
     parser.add_argument('--outname', help='name of the output')
-    '''
-    parser.add_argument('--net', help='path no net')
-    parser.add_argument('--data', help='path to folder containing data')
-    parser.add_argument('--label', type = str, default = None, help='path to folder containing label')
-    
-    parser.add_argument('--disable-cuda', action='store_true', help='Disable CUDA')
-    parser.add_argument('--device', type = int, default = 0, help = "number of device to use")
-    parser.add_argument('--fullsize', action='store_true', help='test the network at the global scope')
-    parser.add_argument('--NWS', action = 'store_true', help='use Resolution of hires')
-    
-    parser.add_argument('--classes', type = int, default = 1, help = 'How many classes the network should predict (binary case has 1 class denoted by probabilities)')
-    parser.add_argument('--normType', type = int, default = 0, help = 'How to normalize the data: 0 min-max, 1 mean-var, 2/3 the same but per pixel')
-    parser.add_argument('--labelGroupingList', type = str, default = None, help = 'Comma separated list of label groups \n possible fields are w c o s (warm, cold, occluson, stationary)')
-    parser.add_argument('--ETH', action = 'store_true', help = 'Compare against an ETH result instead of net')
-    parser.add_argument('--show-error', action = 'store_true', help = 'show the inividual error values during inference')
-    parser.add_argument('--fromFile', type = str, default = None, help = 'show the inividual error values during inference')
-    parser.add_argument('--calcType', type = str, default = "ML", help = 'from which fronts should the crossing be calculated')
-    
-    '''
+    # for future use, currently default is fine
+    parser.add_argument('--calcVar', type = str, default = "precip", help = 'which variable to measure along the cross section')
     args = parser.parse_args()
     #args.binary = args.classes == 1
     
@@ -115,22 +97,22 @@ def performInference(loader, num_samples, parOpt, args):
             if idx<skip:
                 continue
             if(idx == num_samples+skip):
-                exit(1)
                 break
             if(not torch.cuda.is_available()):
                 inputs, labels, filename = data.data, data.labels, data.filenames
             else:
-                inputs, labels, filename = data.data.cpu().numpy(), data.labels, data.filenames
+                inputs, labels, filename = data
+                inputs = inputs.cpu()
             
             inputs = inputs[:,border:-border,border:-border,:]
 
-            front = inputs[0]
+            front = inputs.numpy()
             for ftype in range(5):
                 front[:,:,ftype] = distance_transform_edt(1-front[:,:,ftype])<=Boxsize
             total_fronts[idx,:,:,:] = front[:,:,:].astype(np.bool)
         # Uncomment to Write the calculated fronts as a single file 
-        total_fronts.tofile(os.path.join(args.mask, "tmp2016_front4d_l2_v2.bin"))
-        exit(1)
+        #total_fronts.tofile(os.path.join(args.mask, "tmp2016_front4d_l2_v2.bin"))v
+        #exit(1)
     else:
         # Already precalculated fronts in a single file. Load only once. Also No need for widening!
         total_fronts = np.fromfile(front_file, dtype=np.bool).reshape(-1,680,1400,5)
@@ -153,13 +135,13 @@ def performInference(loader, num_samples, parOpt, args):
     tgt_latrange, tgt_lonrage = data_set.getCropRange(data_set.mapTypes[mapType][1], data_set.mapTypes[mapType][2], data_set.mapTypes[mapType][3], 0)
     # the files have lat 90 - -90,   lon 0 - 360
     # => we need to offset lonrange
-    exEvs = np.zeros((rootgrp["time"][:].shape[0], abs(int(tgt_latrange[0])-int(tgt_latrange[1]))*4, abs(int(tgt_lonrage[1])-int(tgt_lonrage[0]))*4), dtype =np.bool)
+    exEvs = np.zeros((rootgrp["time"][:].shape[0], abs(int((tgt_latrange[0]-tgt_latrange[1])*4)), abs(int((tgt_lonrage[1]-tgt_lonrage[0])*4))), dtype =np.bool)
     print(exEvs.shape[0], num_samples)
     if(tgt_lonrage[0] < 0 and tgt_lonrage[1] >= 0):
-        exEvs[:,:,:-int(tgt_lonrage[0])*4] =  (rootgrp[tgtvar][:,int(90-tgt_latrange[0])*4:int(90-tgt_latrange[1])*4, int(tgt_lonrage[0])*4:]).astype(np.bool)
-        exEvs[:,:,-int(tgt_lonrage[0])*4:] = (rootgrp[tgtvar][:,int(90-tgt_latrange[0])*4:int(90-tgt_latrange[1])*4, :int(tgt_lonrage[1])*4]).astype(np.bool)
+        exEvs[:,:,:-int(tgt_lonrage[0])*4] =  (rootgrp[tgtvar][:,int((90-tgt_latrange[0])*4):int((90-tgt_latrange[1])*4), int((tgt_lonrage[0])*4):]).astype(np.bool)
+        exEvs[:,:,-int(tgt_lonrage[0])*4:] = (rootgrp[tgtvar][:,int((90-tgt_latrange[0])*4):int((90-tgt_latrange[1])*4), :int((tgt_lonrage[1])*4)]).astype(np.bool)
     else:
-        exEvs = rootgrp[tgtvar][:,int(90-tgt_latrange[0])*4:int(90-tgt_latrange[1])*4, int(tgt_lonrage[0])*4:int(tgt_lonrage[1])*4]
+        exEvs = rootgrp[tgtvar][:,int((90-tgt_latrange[0])*4):int((90-tgt_latrange[1])*4), int((tgt_lonrage[0])*4):int((tgt_lonrage[1])*4)]
     rootgrp.close()
 
     # our output has a border => so add this to the mask file, too
@@ -174,12 +156,12 @@ def performInference(loader, num_samples, parOpt, args):
     tgt_latrange, tgt_lonrage = data_set.getCropRange(data_set.mapTypes[mapType][1], data_set.mapTypes[mapType][2], data_set.mapTypes[mapType][3], 0)
     # the files have lat 90 - -90,   lon 0 - 360
     # => we need to offset lonrange
-    heightmap = np.zeros((abs(int(tgt_latrange[0])-int(tgt_latrange[1]))*4, abs(int(tgt_lonrage[1])-int(tgt_lonrage[0]))*4))
+    heightmap = np.zeros((abs(int((tgt_latrange[0]-tgt_latrange[1])*4)), abs(int((tgt_lonrage[1]-tgt_lonrage[0])*4))))
     if(tgt_lonrage[0] < 0 and tgt_lonrage[1] >= 0):
-        heightmap[:,:-int(tgt_lonrage[0])*4] =  (rootgrp["z"][0,int(90-tgt_latrange[0])*4:int(90-tgt_latrange[1])*4, int(tgt_lonrage[0])*4:])
-        heightmap[:,-int(tgt_lonrage[0])*4:] = (rootgrp["z"][0,int(90-tgt_latrange[0])*4:int(90-tgt_latrange[1])*4, :int(tgt_lonrage[1])*4])
+        heightmap[:,:-int((tgt_lonrage[0])*4)] =  (rootgrp["z"][0,int((90-tgt_latrange[0])*4):int((90-tgt_latrange[1])*4), int((tgt_lonrage[0])*4):])
+        heightmap[:,-int((tgt_lonrage[0])*4):] = (rootgrp["z"][0,int((90-tgt_latrange[0])*4):int((90-tgt_latrange[1])*4), :int((tgt_lonrage[1])*4)])
     else:
-        heightmap = rootgrp["z"][0,int(90-tgt_latrange[0])*4:int(90-tgt_latrange[1])*4, int(tgt_lonrage[0])*4:int(tgt_lonrage[1])*4]
+        heightmap = rootgrp["z"][0,int((90-tgt_latrange[0])*4):int((90-tgt_latrange[1])*4), int((tgt_lonrage[0])*4):int((tgt_lonrage[1])*4)]
     rootgrp.close()
 
 

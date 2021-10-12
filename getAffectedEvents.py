@@ -38,16 +38,19 @@ from InferOutputs import setupDataLoader, setupDevice, inferResults, Distributed
 def parseArguments():
     parser = argparse.ArgumentParser(description='FrontNet')
 
-    parser.add_argument('--data', help='path to folder containing data')
-    parser.add_argument('--precip', help='path to folder containing Precipitation Data')
+    parser.add_argument('--data', help='path to folder containing data: <data>/YYYYMMDD_HH.bin')
+    parser.add_argument('--precip', help='path to folder containing Precipitation Data: <precip>/YYYY/MM/precipYYYYMMDD_HH.nc')
     parser.add_argument('--pctFile', help='path to File containing the 99th percentile for thresholding of extreme events')
-    parser.add_argument('--singleFile', type = int, help='data is a single file containing all fronts and precip folder containg a single file containing all extrem events named "tmp2016_eventMasks_<season>.nc"')
     parser.add_argument('--season', type = str, default = "all", help='season to calculate for (djf, mam, jja, son) , default whole year is take')
     parser.add_argument('--extremeInfluence', type = int, help='Use grid points associated with an extreme event instead of front, keeping fronts spatially accurate but dilating extreme events instead')
     parser.add_argument('--outname', help='name of the output')
     parser.add_argument('--num_samples', type = int, default = -1, help='number of samples to infere from the dataset')
-    parser.add_argument('--preprocessed', type=int, help='fronts are already processed => no dilation necessary')
+    parser.add_argument('--boxsize', type = int, default = 10, help = 'radius for association in pixel (1 px = 0.25 degree)')
+    # for future use... currently default is fine
     parser.add_argument('--calcVar', type = str, default = "precip", help = 'which variable to measure along the cross section')
+    parser.add_argument('--singleFile', type = int, help='data is a single file containing all fronts and precip folder containg a single file containing all extrem events named "tmp2016_eventMasks_<season>.nc"')
+    parser.add_argument('--preprocessed', type=int, help='fronts are already processed => no dilation necessary')
+
     args = parser.parse_args()
     
     return args
@@ -84,8 +87,8 @@ def readSecondary(rootgrp, var, time, latrange, lonrange):
 def performInference(loader, num_samples, parOpt, args):
     border = 20
     
-    # number of iterations of dilation
-    Boxsize = 10
+    # number of iterations of dilation (radius of search)
+    Boxsize = args.boxsize
 
     Front_Event_count = np.zeros((5))
     Event_count = 0
@@ -113,8 +116,8 @@ def performInference(loader, num_samples, parOpt, args):
 
 
     skip = 0
-
-    singleFiles = args.singleFile
+    # use individual files for each timestamp (else one single File containing all data)
+    singleFiles = not args.singleFile
 
     
 
@@ -148,14 +151,15 @@ def performInference(loader, num_samples, parOpt, args):
             if(not torch.cuda.is_available()):
                 inputs, labels, filename = data.data, data.labels, data.filenames
             else:
-                inputs, labels, filename = data.data.cpu().numpy(), data.labels, data.filenames
+                inputs, labels, filename = data
+                inputs = inputs.cpu()
 
             # skip infer if wrong month is drawn
             year,month,day,hour = filename[0][no:no+4],filename[0][no+4:no+6],filename[0][no+6:no+8],filename[0][no+9:no+11]
             if(not (month in tgt_mnths)):
                 continue
-
-            outputs = inputs
+            # Assume precalculated results!
+            outputs = inputs.numpy()
             
             # Get Corresponding file with precipitation data
             precipFile = os.path.join(args.precip, year, month, "precip{0}{1}{2}_{3}.nc".format(year,month,day,hour))
@@ -184,11 +188,10 @@ def performInference(loader, num_samples, parOpt, args):
             Extreme_Event_count += np.sum(extreme_events)
             # for each type of front
             for ftype in range(outputs.shape[-1]):
-                front = outputs[0,border:-border,border:-border,ftype]
+                front = outputs[0,border:-border, border:-border,ftype]
                 if(not args.extremeInfluence):
                     # Widen Fronts according to boxsize
-                    for ftype in range(5):
-                        front[:,:,ftype] = distance_transform_edt(1-front[:,:,ftype])<=Boxsize
+                    front = distance_transform_edt(1-front)<=Boxsize
 
                 # Count Events associated with a Front
                 front_events = events*front
@@ -211,8 +214,8 @@ def performInference(loader, num_samples, parOpt, args):
             allFrontEvents = np.fromfile(frontFile, dtype=np.bool).reshape(-1, 720, 1440, 5)
             allFrontEvents = allFrontEvents[:,border:-border,border:-border]
             if(not extreme_Influence):
-                for x in range(allFrontEvents.shape[0]):
-                    print("Widening front Event {}".format(x), flush = True)
+                for x in range(args.num_samples):
+                    print("Widening front Event {} of {}".format(x, allFrontEvents.shape[0]), flush = True)
                     for ft in range(allFrontEvents.shape[-1]):
                         allFrontEvents[x,:,:,ft] = distance_transform_edt(1-allFrontEvents[x,:,:,ft]) <= Boxsize
             #allFrontEvents.astype(np.bool).tofile(os.path.join(args.precip, "widenedFronts2016_{}_l2norm_{}.bin".format(args.season, Boxsize)))

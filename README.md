@@ -16,7 +16,7 @@ The provided output has the same resolution as the input data, where for each pi
 The pretrained example was trained using input samples from 2012 to 2015 and 2018 to 2019 against labeled data generated from the Deutscher Wetterdienst (DWD) and North American Weather Service (NWS). The Network was validated on data from 2017 (not used for training) and tested on data from 2016 (not used for training)
 
 # Scores and Output examples
-The trained network generates a Critical Success Index against the weather service labels of more than 60\% for the detection of fronts. An exemplary timelapse of the networks output can be seen at https://av.tib.eu/media/53399 for January 2016 at a 1 hour resolution. 
+The trained network generates a Critical Success Index against the weather service labels of more than 60\% for the detection of fronts. An exemplary timelapse of the networks output can be seen at https://av.tib.eu/media/54716 for January 2016 at a 1 hour resolution. 
 
 
 # Installation
@@ -46,20 +46,26 @@ The trained network can be tested on NWS data using the provided scripts. All sc
 
 Potential command line command, assuming you are currently located in the Scripts_and_Examples Folder:
 
+Create_Output_Samples_raw.sh path/to/network/<network_name>.pth  /path/to/network/data_set_info.txt <output_name> <path/to/DataFolder> <path/to/LabelFolder>
+
 Create_Climatology.sh path/to/network/<network_name>.pth  /path/to/network/data_set_info.txt <output_name> <path/to/DataFolder> <path/to/LabelFolder>
 
-Calculate_CSI.sh path/to/network/<network_name>.pth  /path/to/network/data_set_info.txt <output_name> <path/to/DataFolder> <path/to/LabelFolder>
+Calculate_CSI.sh path/to/network/<network_name>.pth  /path/to/network/data_set_info.txt <output_name> <path/to/DataFolder> <path/to/LabelFolder> [--preCalc]
 
-Create_Cross_Section.sh path/to/network/<network_name>.pth  /path/to/network/data_set_info.txt <output_name> <variable> <path/to/DataFolder> <path/to/LabelFolder>
+Create_Cross_Section.sh path/to/network/<network_name>.pth  /path/to/network/data_set_info.txt <output_name> <variable> <path/to/DataFolder> <path/to/LabelFolder> [--preCalc]
 
-Create_Output_Samples.sh path/to/network/<network_name>.pth  /path/to/network/data_set_info.txt <output_name> <path/to/DataFolder> <path/to/LabelFolder>
+Create_Output_Samples.sh path/to/network/<network_name>.pth  /path/to/network/data_set_info.txt <output_name> <path/to/DataFolder> <path/to/LabelFolder> [--preCalc]
 
 <variable> is a string corresponding to the variable that should be extracted from the ERA5 file. t and q are currently supported. Adding a "d" as a prefix uses the derivative instead (e.g. dt or dq). 
+
+For best results we propose to use larger input dimensions, to reduce the effect of critical information being cropped.
+
+the option [--preCalc] can be used, when the result (folder) of "Create_Output_Samples_raw.sh" is used as data input, to omit GPU-Inference. The results are then directly read from disk instead. Note: Create_Output_Samples_raw.sh creates fullsize (720 x 1440 x 5) outputs to minimize cropping issues. Reading those pre calculated results also assumes that the files have these dimensions! If the first output channel shall be filtered to only contain information from a subset of the four classification channels (e.g. to create a climatology omitting stationary fronts) [--preCalc] should not be used! The subset filtering adjusts the predicted probabilities. The pre-Calculated results however are saved after thresholding, thus no longer containing the exact probability information.
 
 This will create a subfolder <output_name> in the folder according to the used script, which contains several output files. 
 ".bin" files are binary dumps of float32 data. 
 In the case of Climatologies they have a resolution of 720x1440. 
-In the case of Cross Sections they have a resolution of 17x4.  
+In the case of Cross Sections they have a resolution of 21x4.  
 
 # Training of a network
 Training of a network can be performed using "train.sh" script.
