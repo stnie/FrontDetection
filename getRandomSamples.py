@@ -111,7 +111,7 @@ def performInference(loader, num_samples, parOpt, args):
                 front[:,:,ftype] = distance_transform_edt(1-front[:,:,ftype])<=Boxsize
             total_fronts[idx,:,:,:] = front[:,:,:].astype(np.bool)
         # Uncomment to Write the calculated fronts as a single file 
-        #total_fronts.tofile(os.path.join(args.mask, "tmp2016_front4d_l2_v2.bin"))v
+        #total_fronts.tofile(os.path.join(args.mask, "tmp2016_front4d_l2_v2.bin"))
         #exit(1)
     else:
         # Already precalculated fronts in a single file. Load only once. Also No need for widening!

@@ -200,8 +200,10 @@ class WeatherFrontDataset(Dataset):
                 image = self.getRegularGridImage(img_name, self.mapTypes[mapType][1], self.mapTypes[mapType][2], self.mapTypes[mapType][3], extract_seed, transform_seed)
             else:
                 image = self.getImage(img_name, self.mapTypes[mapType][1], self.mapTypes[mapType][2], self.mapTypes[mapType][3], extract_seed, transform_seed)
-        except:
+        except Exception as e:
+            print(e)
             print("filename is", filename)
+            raise Exception(e,"\nfailed to extract image data {}".format(filename))
         if(image is None):
             print("failed to extract image data")
             print(filename, img_name, front_name)

@@ -65,7 +65,7 @@ class CSIEvaluator():
         westOff = int(tgtlons[0]+180)
         self.offset = (northOff , westOff)
         self.avgCSI = np.zeros((5,7))
-        # The comparison are is larger than the evaluation area, to reduce any loss of mathches caused by cropping
+        # The comparison area is larger than the evaluation area, to reduce any loss of mathches caused by cropping
         self.evCrop = (int((tgtlats[0]-evlats[0])*pixPerDeg), int((evlons[0]-tgtlons[0])*pixPerDeg))
         self.inlats = inlats
         self.inlons = inlons
