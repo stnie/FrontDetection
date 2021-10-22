@@ -267,7 +267,8 @@ def performInference(model, loader, num_samples, parOpt, args):
             # Create the diff img
             mydiffIn = np.zeros_like(labels[0].cpu().numpy())
             mydiffIn[:,:,0] = np.max(labels[0].cpu().numpy(), axis=-1)
-            mydiffIn[:,:,3] = np.max(outputs[0], axis=-1)
+            # Use Blue for Colorblindness
+            mydiffIn[:,:,1] = np.max(outputs[0], axis=-1)
             # If detection and label overlap, show detection (to prevent color mixture)
             tmp = np.nonzero(mydiffIn[:,:,3])
             mydiffIn[tmp[0],tmp[1],0] = 0
