@@ -44,6 +44,10 @@ mkdir OutputImages
 # Usage of the provided network
 The trained network can be tested on NWS data using the provided scripts. All scripts assume that the necessary ERA5 data is located at <path/to/DataFolder> without any subfolders, while labels are located at <path/to/LabelFolder>/hires/. Corresponding input and label files are assumend to have the same name except for the extension. Label data should be provided as ".txt" file in a format according to the High Resolution Coded Surface Bulletins issued by the NWS. 
 
+The provided dataset uses some assumptions for the filenames:
+ERA5 data is assumed to be named: *bml*YYYYMMDD_HH.nc  , where YYYYMMDD_HH encodes the date accordingly
+Label data and precalculated Results are assumend to be named : YYYYMMDD_HH.<ext> , with a corresponding file extension <ext>
+
 Potential command line command, assuming you are currently located in the Scripts_and_Examples Folder:
 
 Create_Output_Samples_raw.sh path/to/network/<network_name>.pth  /path/to/network/data_set_info.txt <output_name> <path/to/DataFolder> <path/to/LabelFolder>
