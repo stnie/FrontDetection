@@ -95,8 +95,10 @@ def setupDataset(args):
 
     myEraExtractor = DerivativeFlippingAwareEraExtractor(variables, [], [], 0.0, 0 , 1, normType = normType, sharedObj = None)
     # Create Dataset
-    
-    data_set = WeatherFrontDataset(data_dir=data_fold, label_dir=None, mapTypes = mapTypes, levelRange = myLevelRange, transform=myTransform, outSize=cropsize, labelThickness= labelThickness, label_extractor = None, era_extractor = myEraExtractor, asCoords = False, has_subfolds = (True,False), removePrefix = 3)
+    subfolds = (False, False)
+    remPref = 0
+
+    data_set = WeatherFrontDataset(data_dir=data_fold, label_dir=None, mapTypes = mapTypes, levelRange = myLevelRange, transform=myTransform, outSize=cropsize, labelThickness= labelThickness, label_extractor = None, era_extractor = myEraExtractor, asCoords = False, has_subfolds = subfolds, removePrefix = remPref)
     return data_set
 
 def setupDataLoader(data_set, numWorkers):

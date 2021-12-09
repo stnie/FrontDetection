@@ -63,12 +63,11 @@ def parseArguments():
     parser.add_argument('--classes', type = int, default = 1, help = 'How many classes the network should predict (binary case has 1 class denoted by probabilities)')
     parser.add_argument('--normType', type = int, default = 0, help = 'How to normalize the data: 0 min-max, 1 mean-var, 2/3 the same but per pixel')
     parser.add_argument('--labelGroupingList', type = str, default = None, help = 'Comma separated list of label groups \n possible fields are w c o s (warm, cold, occluson, stationary)')
-    parser.add_argument('--ETH', action = 'store_true', help = 'Compare against an ETH result instead of net')
     parser.add_argument('--show-error', action = 'store_true', help = 'show the inividual error values during inference')
     parser.add_argument('--fromFile', type = str, default = None, help = 'show the inividual error values during inference')
     parser.add_argument('--calcType', type = str, default = "ML", help = 'from which fronts should the crossing be calculated')
     parser.add_argument('--calcVar', type = str, default = "t", help = 'which variable to measure along the cross section')
-    parser.add_argument('--secPath', type = str, default = None, help = 'Path to folder with secondary data containing variable information to be evaluated. Data should be stored as <secPath>/YYYY/MM/<fileID>YYYYMMDD_HH.nc . <fileID> is an Identifier based on the type of file (e.g. B,Z,precip)')
+    parser.add_argument('--secPath', type = str, default = None, help = 'Path to folder with secondary data containing variable information to be evaluated. Data should be stored as <secPath>/YYYY/MM/<fileID>YYYYMMDD_HH.nc . <fileID> is an Identifier based on the type of file (e.g. ml,B,Z,precip)')
     args = parser.parse_args()
     args.binary = args.classes == 1
     
@@ -121,14 +120,10 @@ def setupDataset(args):
         print(variables, normType, myLevelRange)
 
     myEraExtractor = DerivativeFlippingAwareEraExtractor(variables, [], [], 0.0, 0 , 1, normType = normType, sharedObj = None)
+    # adjusted for general use
+    subfolds = (False, False)
+    remPref = 0
 
-    subfolds = (True, False)
-    remPref = 3
-
-    if(ETH):
-        myEraExtractor = ETHEraExtractor()
-        subfolds = (False, False)
-        remPref = 1
     if(args.preCalc):
         myEraExtractor = BinaryResultExtractor()
         subfolds = (False, False)
@@ -536,7 +531,7 @@ def performInference(model, loader, num_samples, parOpt, args):
         
         # remove all short labels (# 1 is a dummy value, evaluation will skip 40 pixel anyways)
         labels = filterFronts(labels.cpu().numpy(), 1)
-        if(args.ETH or args.calcType == "WS"):
+        if(args.calcType == "WS"):
             outputs = inputs.permute(0,2,3,1)
         elif(args.preCalc):
             outputs = (inputs*1).cpu().numpy()
@@ -611,12 +606,10 @@ if __name__ == "__main__":
     parOpt = setupDevice(args)
 
     name = os.path.join("CrossSections",args.outname)
-    
-    ETH = args.ETH
 
     args.stacked = True
     data_set = setupDataset(args)    
-    num_worker = 0 if (args.ETH or args.calcType == "WS") else 8
+    num_worker = 0 if (args.calcType == "WS") else 8
     loader = setupDataLoader(data_set, num_worker)
     
 
@@ -652,7 +645,7 @@ if __name__ == "__main__":
         print("")
 
     model = None
-    if(not(args.ETH or args.calcType == "WS" or args.preCalc)):
+    if(not(args.calcType == "WS" or args.preCalc)):
        model = setupModel(args, parOpt)
 
     num_samples = len(loader)

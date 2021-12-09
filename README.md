@@ -42,11 +42,11 @@ mkdir CrossSections
 mkdir OutputImages
 
 # Usage of the provided network
-The trained network can be tested on NWS data using the provided scripts. All scripts assume that the necessary ERA5 data is located at <path/to/DataFolder> without any subfolders, while labels are located at <path/to/LabelFolder>/hires/. Corresponding input and label files are assumend to have the same name except for the extension. Label data should be provided as ".txt" file in a format according to the High Resolution Coded Surface Bulletins issued by the NWS. 
+The trained network can be tested on NWS data using the provided scripts.  
 
-The provided dataset uses some assumptions for the filenames:
-ERA5 data is assumed to be named: *bml*YYYYMMDD_HH.nc  , where YYYYMMDD_HH encodes the date accordingly
-Label data and precalculated Results are assumend to be named : YYYYMMDD_HH.<ext> , with a corresponding file extension <ext>
+All scripts assume that the necessary ERA5 data is located at <path/to/DataFolder> without any subfolders, while labels are located at <path/to/LabelFolder>/hires/. 
+
+Corresponding input and label files are assumend to have the same name except for the extension. Label data should be provided as ".txt" file in a format according to the High Resolution Coded Surface Bulletins issued by the NWS. 
 
 Potential command line command, assuming you are currently located in the Scripts_and_Examples Folder:
 
@@ -56,11 +56,14 @@ Create_Climatology.sh path/to/network/<network_name>.pth  /path/to/network/data_
 
 Calculate_CSI.sh path/to/network/<network_name>.pth  /path/to/network/data_set_info.txt <output_name> <path/to/DataFolder> <path/to/LabelFolder> [--preCalc]
 
-Create_Cross_Section.sh path/to/network/<network_name>.pth  /path/to/network/data_set_info.txt <output_name> <variable> <path/to/DataFolder> <path/to/LabelFolder> [--preCalc]
+Create_Cross_Section.sh path/to/network/<network_name>.pth  /path/to/network/data_set_info.txt <output_name> <variable> <path/to/DataFolder> <path/to/LabelFolder> <path/to/variableFolder> [--preCalc]
 
 Create_Output_Samples.sh path/to/network/<network_name>.pth  /path/to/network/data_set_info.txt <output_name> <path/to/DataFolder> <path/to/LabelFolder> [--preCalc]
 
-<variable> is a string corresponding to the variable that should be extracted from the ERA5 file. t and q are currently supported. Adding a "d" as a prefix uses the derivative instead (e.g. dt or dq). 
+<variable> is a string corresponding to the variable that should be extracted from the ERA5 file, with a corresponding suffix to detail which type of ERA5 File should be used. t_ml for example extracts t from a file named mlYYYYMMDD_HH.nc, while q_z extracts q from a file named ZYYYYMMDD_HH.nc. Adding a "d" as a prefix uses the derivative instead (e.g. dt or dq). Potential suffixes are : _ml , _z and _b. Note that at this point only a very restricted selection of variables, files and height levels is directly supported (e.g. t, q, rq, ept, wind, tfp; with most of these being available for the _b suffix). This will be adjusted in a future release.
+
+<variableFolder> is a folder containing ERA5 data, where the corresponding <variable> should be extracted from. 
+The data is assumed to be organized in multiple folders <variableFolder/YYYY/MM/dataname>. Note that these <dataname> is assumend to be prefixed by the suffix of <variable> (e.g. <variableFolder>/2016/02/ml20160201_00.nc is the file to extract t_ml at 1st February 2016 , 00 UTC)
 
 For best results we propose to use larger input dimensions, to reduce the effect of critical information being cropped.
 
@@ -70,6 +73,7 @@ This will create a subfolder <output_name> in the folder according to the used s
 ".bin" files are binary dumps of float32 data. 
 In the case of Climatologies they have a resolution of 720x1440. 
 In the case of Cross Sections they have a resolution of 21x4.  
+
 
 # Training of a network
 Training of a network can be performed using "train.sh" script.

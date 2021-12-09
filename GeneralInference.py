@@ -612,8 +612,9 @@ def setupDataset(args):
 
     
     myEraExtractor = DerivativeFlippingAwareEraExtractor(variables, [], [], 0.0, 0 , 1, normType = normType, sharedObj = None)
-    subfolds = (True, False)
-    remPref = 3
+    subfolds = (False, False)
+    # for general use
+    remPref = 0
     halfResEval = args.halfRes
     if(ETH):
         myEraExtractor = ETHEraExtractor()

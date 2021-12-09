@@ -90,35 +90,23 @@ class WeatherFrontDataset(Dataset):
             self.fileList = []
             for fold in os.listdir(self.data_dir):
                 for filen in os.listdir(os.path.join(self.data_dir, fold)):
-                    # This is mostly due to restrictions in our data folds.
-                    if("B20" in filen):
-                        continue
-                    if(self.removePrefix == 8 and not ( "_00" in filen or "_06" in filen or "_12" in filen or "_18" in filen)):
-                        continue
-                    if(self.removePrefix == 3 and not "bml" in filen):
-                        continue
-                    else:
-                        # if the dataset extracts labels, check if the corresponding labels exist
-                        if(self.has_label):
-                            potLabel = datanameToLabelname(filen, self.mapTypes, self.removePrefix)
-                            labelExists = False
-                            for key, val in potLabel.items():
-                                foldna, filena = val.split("/")
-                                if filena in os.listdir(os.path.join(self.label_dir,foldna)):
-                                    labelExists=True
-                            if(labelExists):
-                                self.fileList.append(os.path.join(fold,filen))
-                        # if no labels are to be extracted simply append the data
-                        else:
+                    # if the dataset extracts labels, check if the corresponding labels exist
+                    if(self.has_label):
+                        potLabel = datanameToLabelname(filen, self.mapTypes, self.removePrefix)
+                        labelExists = False
+                        for key, val in potLabel.items():
+                            foldna, filena = val.split("/")
+                            if filena in os.listdir(os.path.join(self.label_dir,foldna)):
+                                labelExists=True
+                        if(labelExists):
                             self.fileList.append(os.path.join(fold,filen))
+                    # if no labels are to be extracted simply append the data
+                    else:
+                        self.fileList.append(os.path.join(fold,filen))
         # ERA Data is organized without subfolders (2017 -> 20170101_00.nc)
         else:
             self.fileList = []
             for filen in os.listdir(self.data_dir):
-                if("B20" in filen):
-                    continue
-                #if(self.removePrefix == 0 and not ( "_00" in filen or "_06" in filen or "_12" in filen or "_18" in filen)):
-                #    continue
                 if(self.has_label):
                     potLabel = datanameToLabelname(filen, self.mapTypes, self.removePrefix)
                     labelExists = False
