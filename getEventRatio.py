@@ -115,7 +115,7 @@ def plotBoxPlt(x_event, y_event, y_event_div, num_bins, region, filter, savename
         indexation = "(a)"
     else:
         front_type += " fronts"
-    plt.title(indexation+" Proportion of Extreme Precipitation Events associated with "+front_type)
+    plt.title(indexation+" Proportion of extreme precipitation events associated with "+front_type)
     fig.savefig(savename+".png")
     plt.close(fig)
 
@@ -284,12 +284,12 @@ def saveImgRegion(image, region, filter, savename, base_low = None, base_up = No
         indexation = "(a)"
     else:
         front_type += " fronts"
-    base_type = "Extreme Precipitation"
+    base_type = "extreme precipitation"
     if(savename.split("/")[-1].split("_")[-3] == "fronts"):
         tmp = base_type
         base_type = front_type
         front_type = tmp
-    ax.set_title("{} Proportion of {} Associated with {}".format(indexation, base_type, front_type))
+    ax.set_title("{} Proportion of {} associated with {}".format(indexation, base_type, front_type))
     
     fig.savefig(savename+".png")
     plt.close(fig)
