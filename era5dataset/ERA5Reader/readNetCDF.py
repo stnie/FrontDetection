@@ -246,7 +246,7 @@ class CDFReader:
         year,month,day,hour = date
         target_name = variable+"_m"+str(int(month))+"_h"+str(int(hour))+".bin"
         
-        pathToMasks = self.pathToMasks#os.path.join("/home","stefan","Documents","Binary","Front-Detection","myTrainingScripts","era5dataset")
+        pathToMasks = self.pathToMasks
         if(type == 0):
             mask_file_string1 = os.path.join(pathToMasks,"statimgs","min",target_name)
             mask_file_string2 = os.path.join(pathToMasks,"statimgs","max",target_name)
@@ -783,78 +783,14 @@ def scaleArray(data, scal_fac, add_off):
     data += add_off
 
 def dewpointTemp(temp, humidity, level_range = slice(0,6,1)):
-    K3 = 243.12
-    K2 = 17.62
-    K1 = 6.112
-    cels = temp-273.15
-    psaett = K1 * np.exp((K2*cels)/(K3+cels))
-    PaPerLevel = [722.9795, 795.6396, 856.8376, 986.6036, 1002.2250, 1013.2500]
-    PaPerLevel = PaPerLevel[level_range]
-    #PaPerLevel = [986.6036, 1002.2250, 1013.2500]
-    #PaPerLevel = [722.9795, 795.6396, 856.8376]
-    #ph = np.zeros(humidity.shape)
-    S = np.zeros_like(humidity)
-    for i in range(len(PaPerLevel)):
-        #ph[i] = humidity[i]*PaPerLevel[i]
-        S[i] = 0.622*psaett[i] / ((PaPerLevel[i]-0.378*psaett[i]))
-    relHum = humidity/S
-    lnh = np.log(relHum, where=(relHum>0))
-
-    #dewP1 = K3* np.log((ph)/((0.622+humidity)*K1))
-    #dewP2 = K2 - np.log((ph)/((0.622+humidity)*K1))
-    #dewP = dewP1/dewP2
-    #divisor = K3+cels
-    
-    dewP1 = K2*cels / (K3+cels) + lnh
-    dewP2 = K2*K3 / (K3+cels) - lnh
-
-    dewP = K3* dewP1/dewP2
-    return dewP
+    pass
 
 def equivalentPotentialTempNew(temp, humidity, PaPerLevel):
-    
-    cp = 1004.82
-    Rd = 287.05
-    equiPotTemp = temp[:]
-    L = 2257000
-    m = humidity
-    PaPerLevel = [722.9795, 795.6396, 856.8376, 986.6036, 1002.2250, 1013.2500]
-    #PaPerLevel = PaPerLevel[level_range]
-    for i in range(len(PaPerLevel)):
-        equiPotTemp[i] *= pow((1000/PaPerLevel[i]), Rd/cp)*np.exp(L*m[i] / (cp*temp[i]))
-    return equiPotTemp
+    pass
  
 
 def equivalentPotentialTemp(t, q, PaPerLevel):
-    #pu = units.Quantity(p, "Pa")
-    #tu = units.Quantity(t, "K")
-    #dewp = dewpoint_from_specific_humidity(pu, tu, q)
-    #return equivalent_potential_temperature(pu, tu, dewp)
-    '''
-    # celsius temp
-    ctemp = t-273.15
-
-    # constants
-    cp = 1.00482
-    cw = 4.18674
-    Rd = 287.05
-
-    # L value
-    L = 2500.78-2.325734*ctemp
-
-    #equivalent temp
-    ctemp += q*(L/(cp+q*cw)) + 273.15
-
-    # precalculate exponent
-    cp *= 1000
-    val = Rd/cp
-
-    #equivalent potential temp (this is very slow! approx 3.5 seconds)
-    # multiplication by 100 to get Pa out of hPa
-    ctemp *= np.power(100000/PaPerLevel, val)
-
-    return ctemp
-    '''
+    pass
 
 def getValueRanges(variable):
     minval,maxval = 0,1

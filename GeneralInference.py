@@ -536,12 +536,12 @@ def parseArguments():
     
     # inference information
     parser.add_argument('--ETH', action = 'store_true', help = 'Compare against an ETH result instead of net')
-    parser.add_argument('--preCalc', action = 'store_true')
+    parser.add_argument('--preCalc', action = 'store_true', help = 'use precalculated binaries as input')
 
     # network information
     parser.add_argument('--net', help='path no net')
     parser.add_argument('--classes', type = int, default = 1, help = 'How many classes the network should predict (binary case has 1 class denoted by probabilities)')
-    parser.add_argument('--fromFile', type = str, default = None, help = 'show the inividual error values during inference')
+    parser.add_argument('--fromFile', type = str, default = None, help = 'file to extract network configuration from')
     
     # evaluation information
     parser.add_argument('--CSI', action = 'store_true', help = 'evaluate the CSI')

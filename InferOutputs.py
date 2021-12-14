@@ -48,7 +48,7 @@ def parseArguments():
     parser.add_argument('--classes', type = int, default = 1, help = 'How many classes the network should predict (binary case has 1 class denoted by probabilities)')
     parser.add_argument('--normType', type = int, default = 0, help = 'How to normalize the data: 0 min-max, 1 mean-var, 2/3 the same but per pixel')
     parser.add_argument('--labelGroupingList', type = str, default = None, help = 'Comma separated list of label groups \n possible fields are w c o s (warm, cold, occluson, stationary)')
-    parser.add_argument('--fromFile', type = str, default = None, help = 'show the inividual error values during inference')
+    parser.add_argument('--fromFile', type = str, default = None, help = 'file to extract network configuration from')
     parser.add_argument('--border', type = int, default = 5, help = "A Border in degree which is not evaluated")
     parser.add_argument('--skip', type = int, default = 0, help = "How many of the data should be skipped (skip + not skipped = num_samples)")
     args = parser.parse_args()
