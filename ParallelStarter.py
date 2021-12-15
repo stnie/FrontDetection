@@ -9,7 +9,6 @@ def ParseArguments(parseScriptArgs = None):
     parser.add_argument("--slurm", action='store_true', default=False, 
                         help="Set number of nodes, master node and "
                         "nproc per node from slurm environment variables")
-
     # Communication 
     parser.add_argument("--nnodes", type=int, default=1,
                         help="The number of nodes to use for distributed "
@@ -18,21 +17,13 @@ def ParseArguments(parseScriptArgs = None):
                         help="The rank of the node for multi-node distributed "
                              "training")
     parser.add_argument("--nproc_per_node", type=int, default=1,
-                        help="The number of processes to launch on each node, "
-                             "for GPU training, this is recommended to be set "
-                             "to the number of GPUs in your system so that "
-                             "each process can be bound to a single GPU.")
+                        help="The number of processes to use per node")
     parser.add_argument("--master_addr", default="127.0.0.1", type=str,
-                        help="Master node (rank 0)'s address, should be either "
-                             "the IP address or the hostname of node 0, for "
-                             "single node multi-proc training, the "
-                             "--master_addr can simply be 127.0.0.1")
+                        help="ip-Address of node with rank 0, default is fine for single node")
 
-    # Set the port (if desired, else just keep the default)
+    # Set the port 
     parser.add_argument("--master_port", default=29500, type=int,
-                        help="Master node (rank 0)'s free port that needs to "
-                             "be used for communication during distributed "
-                             "training")
+                        help="port of node with rank 0 for communication, default is fine for single node")
 
     # Additional Arguments to be parsed!
     parseScriptArgs(parser)
@@ -59,12 +50,6 @@ def PrepareMultiprocessing(args, func):
     processes = []
     if 'OMP_NUM_THREADS' not in os.environ and args.nproc_per_node > 1:
         os.environ["OMP_NUM_THREADS"] = str(1)
-        print("*****************************************\n"
-              "Setting OMP_NUM_THREADS environment variable for each process "
-              "to be {} in default, to avoid your system being overloaded, "
-              "please further tune the variable for optimal performance in "
-              "your application as needed. \n"
-              "*****************************************".format(os.environ["OMP_NUM_THREADS"]))
 
     #Spawny
     if(world_size > 1):
